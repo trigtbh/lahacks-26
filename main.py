@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from elevenlabs.client import AsyncElevenLabs
 from dotenv import load_dotenv
 
-from agentverse_client import delete_session, find_agent_name, query_agent, start_gateway
+from agentverse_client import find_agent, send_to_agent, start_gateway
 import session_store as sessions
 
 load_dotenv()
@@ -303,35 +303,33 @@ async def workflow_execute(payload: WorkflowRequest):
         session = sessions.get_session(user_id)
         if session:
             agent_name = session.agent_name
-            ai_session_id = sessions.end_session(user_id)
-            if ai_session_id:
-                await delete_session(ai_session_id)
+            sessions.end_session(user_id)
             return await _respond("disconnect", [f"Disconnected from {agent_name}"],
                                   f"Disconnected from {agent_name}.")
 
     # 2. Connect intent — "talk to Caltrain"
     raw_name = _parse_connect_intent(text)
     if raw_name:
-        display_name = await find_agent_name(raw_name)
-        sessions.start_session(user_id, display_name)
-        logger.info(f"[workflow/execute] user={user_id} connecting to agent={display_name!r}")
+        result = await find_agent(raw_name)
+        if not result:
+            return await _respond("connect_failed", [],
+                                  f"Sorry, I couldn't find an agent named '{raw_name}' on Agentverse.")
+        address, display_name = result
+        sessions.start_session(user_id, address, display_name)
+        logger.info(f"[workflow/execute] user={user_id} → agent={display_name} addr={address}")
         return await _respond("connect", [f"Connected to {display_name}"],
                               f"Connected to {display_name}. Go ahead.")
 
-    # 3. Route to active agent session via AI Engine
+    # 3. Route to active agent session via uAgents gateway
     session = sessions.get_session(user_id)
     if session:
         sessions.append_history(user_id, "user", text)
         try:
-            reply, ai_session_id = await query_agent(
-                message=text,
-                user_id=user_id,
-                session_id=session.ai_session_id,
-                agent_context=session.agent_name,
-            )
-            sessions.set_ai_session(user_id, ai_session_id)
+            reply = await send_to_agent(session.agent_address, text, user_id)
+        except TimeoutError:
+            reply = "The agent didn't respond in time. Try again."
         except Exception as e:
-            logger.error(f"[workflow/execute] AI Engine error: {e}", exc_info=True)
+            logger.error(f"[workflow/execute] gateway error: {e}", exc_info=True)
             reply = "Something went wrong reaching the agent. Try again."
         sessions.append_history(user_id, "agent", reply)
         return await _respond("agent_message", [f"Sent to {session.agent_name}"], reply)

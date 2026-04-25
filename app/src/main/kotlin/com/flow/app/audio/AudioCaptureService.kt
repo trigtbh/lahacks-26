@@ -96,6 +96,10 @@ class AudioCaptureService : Service() {
                     when (resp.action) {
                         "workflow" -> {
                             FluxEvents.emitTrigger(resp.transcript)
+                    Log.d("Flux/End", "transcript=${resp.transcript} command=${resp.command}")
+                    if (containsFlux(resp.transcript)) {
+                        FluxEvents.emitTrigger(resp.transcript)
+                        if (containsWorkflow(resp.transcript)) {
                             FluxEvents.emitWorkflowTriggered(resp.command)
                         }
                         "caltrain" -> {
@@ -108,6 +112,19 @@ class AudioCaptureService : Service() {
                                     context = mapOf("source" to "glasses_mic", "chunk_id" to chunkId),
                                 )
                             )
+                        }
+                    }
+                    val phrase = resp.command.ifBlank { resp.transcript }
+                    if (phrase.isNotBlank()) {
+                        apiClient.executeWorkflow(
+                            WorkflowRequest(
+                                triggerPhrase = phrase,
+                                userId = userId,
+                                context = mapOf("chunk_id" to chunkId),
+                            )
+                        ).onSuccess { wf ->
+                            val pcm = wf.audioB64?.let { Base64.decode(it, Base64.DEFAULT) }
+                            if (pcm != null && pcm.isNotEmpty()) playback(pcm)
                         }
                     }
                 }
