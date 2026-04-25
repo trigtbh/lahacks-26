@@ -45,7 +45,7 @@ NOTION_CLIENT_ID     = os.environ.get("NOTION_CLIENT_ID", "")
 NOTION_CLIENT_SECRET = os.environ.get("NOTION_CLIENT_SECRET", "")
 GOOGLE_CLIENT_ID     = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
-BACKEND_URL          = os.environ.get("BACKEND_URL", "http://149.248.10.229:8000")
+BACKEND_URL          = os.environ.get("BACKEND_URL", "https://flux.trigtbh.dev")
 GOOGLE_REDIRECT_URI  = os.environ.get("GOOGLE_REDIRECT_URI", f"{BACKEND_URL}/auth/google/callback")
 
 
