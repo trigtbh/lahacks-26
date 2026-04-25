@@ -8,18 +8,17 @@ from __future__ import annotations
 
 import base64
 import logging
-import os
 from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
 from typing import Any
 
 import httpx
-import google.oauth2.credentials
-import google.auth.transport.requests
 from googleapiclient.discovery import build
 
 import token_store
 import zapier_store
+import google_people
+from google_auth import get_google_creds
 
 log = logging.getLogger(__name__)
 
@@ -27,10 +26,11 @@ _TIMEOUT = 10.0
 
 
 # ─────────────────────────────────────────────
-# Param resolver
+# Param resolvers
 # ─────────────────────────────────────────────
 
-def _resolve(value: Any) -> Any:
+def _resolve_static(value: Any) -> Any:
+    """Resolve time-based resolver keys synchronously."""
     if not isinstance(value, str):
         return value
     if value == "time.now":
@@ -44,34 +44,71 @@ def _resolve(value: Any) -> Any:
     return value
 
 
+async def _resolve_params(user_id: str, params: dict) -> dict:
+    """Resolve all params for a step, including API-backed contact/calendar resolvers."""
+    resolved = {}
+    for key, value in params.items():
+        value = _resolve_static(value)
+
+        if isinstance(value, str):
+            if value.startswith("user.contacts.email:"):
+                name = value[len("user.contacts.email:"):]
+                value = await google_people.resolve_contact_email(user_id, name)
+
+            elif value.startswith("user.contacts.by_name:"):
+                name = value[len("user.contacts.by_name:"):]
+                matches = await google_people.search_contacts(user_id, name)
+                value = matches[0] if matches else {}
+
+            elif value in _CALENDAR_NEXT_EVENT_RESOLVERS:
+                value = await _resolve_calendar_next_event(user_id, value)
+
+        resolved[key] = value
+    return resolved
+
+
+_CALENDAR_NEXT_EVENT_RESOLVERS = {
+    "calendar.next_event",
+    "calendar.next_event.title",
+    "calendar.next_event.attendees",
+    "calendar.next_event.start_time",
+    "calendar.next_event.location",
+}
+
+
+async def _resolve_calendar_next_event(user_id: str, resolver_key: str) -> Any:
+    creds = await get_google_creds(user_id)
+    event = await _get_next_event(creds)
+    if not event:
+        raise ValueError("No upcoming calendar event found")
+    if resolver_key == "calendar.next_event":
+        return event
+    if resolver_key == "calendar.next_event.title":
+        return event.get("summary", "")
+    if resolver_key == "calendar.next_event.attendees":
+        return [a["email"] for a in event.get("attendees", [])]
+    if resolver_key == "calendar.next_event.start_time":
+        return event.get("start", {}).get("dateTime", "")
+    if resolver_key == "calendar.next_event.location":
+        return event.get("location", "")
+    return event
+
+
 # ─────────────────────────────────────────────
-# Google credentials helper
+# Shared calendar helper
 # ─────────────────────────────────────────────
 
-async def _get_google_creds(user_id: str) -> google.oauth2.credentials.Credentials:
-    doc = await token_store.get_token(user_id, "google")
-    if not doc:
-        raise ValueError(f"No Google OAuth token for user '{user_id}' — connect via /auth/google")
-
-    creds = google.oauth2.credentials.Credentials(
-        token=doc["access_token"],
-        refresh_token=doc.get("refresh_token"),
-        token_uri=doc.get("token_uri", "https://oauth2.googleapis.com/token"),
-        client_id=os.getenv("GOOGLE_CLIENT_ID"),
-        client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
-        scopes=doc.get("scopes"),
+async def _get_next_event(creds) -> dict | None:
+    service = build("calendar", "v3", credentials=creds)
+    now = datetime.now(timezone.utc).isoformat()
+    result = service.events().list(
+        calendarId="primary", timeMin=now, maxResults=10,
+        singleEvents=True, orderBy="startTime",
+    ).execute()
+    return next(
+        (e for e in result.get("items", []) if "dateTime" in e.get("start", {})),
+        None,
     )
-
-    if creds.expired and creds.refresh_token:
-        creds.refresh(google.auth.transport.requests.Request())
-        await token_store.save_token(user_id, "google", {
-            "access_token": creds.token,
-            "refresh_token": creds.refresh_token,
-            "token_uri": creds.token_uri,
-            "scopes": list(creds.scopes or []),
-        })
-
-    return creds
 
 
 # ─────────────────────────────────────────────
@@ -79,7 +116,7 @@ async def _get_google_creds(user_id: str) -> google.oauth2.credentials.Credentia
 # ─────────────────────────────────────────────
 
 async def _gmail_send_email(user_id: str, params: dict) -> None:
-    creds = await _get_google_creds(user_id)
+    creds = await get_google_creds(user_id)
     service = build("gmail", "v1", credentials=creds)
 
     to = params["to"]
@@ -100,7 +137,7 @@ async def _gmail_send_email(user_id: str, params: dict) -> None:
 
 
 async def _gmail_draft_email(user_id: str, params: dict) -> None:
-    creds = await _get_google_creds(user_id)
+    creds = await get_google_creds(user_id)
     service = build("gmail", "v1", credentials=creds)
 
     to = params["to"]
@@ -116,12 +153,28 @@ async def _gmail_draft_email(user_id: str, params: dict) -> None:
     log.info("Gmail draft created for %s", to)
 
 
+async def _gmail_search_email(user_id: str, params: dict) -> list[dict]:
+    creds = await get_google_creds(user_id)
+    service = build("gmail", "v1", credentials=creds)
+
+    max_results = int(params.get("max_results", 5))
+    result = service.users().messages().list(
+        userId="me",
+        q=params["query"],
+        maxResults=max_results,
+    ).execute()
+
+    messages = result.get("messages", [])
+    log.info("Gmail search %r → %d result(s)", params["query"], len(messages))
+    return messages
+
+
 # ─────────────────────────────────────────────
 # Google Calendar handlers
 # ─────────────────────────────────────────────
 
 async def _gcal_create_event(user_id: str, params: dict) -> None:
-    creds = await _get_google_creds(user_id)
+    creds = await get_google_creds(user_id)
     service = build("calendar", "v3", credentials=creds)
 
     event: dict = {
@@ -144,20 +197,10 @@ async def _gcal_create_event(user_id: str, params: dict) -> None:
 
 
 async def _gcal_push_event(user_id: str, params: dict) -> None:
-    creds = await _get_google_creds(user_id)
+    creds = await get_google_creds(user_id)
     service = build("calendar", "v3", credentials=creds)
 
-    # Fetch the next upcoming event
-    now = datetime.now(timezone.utc).isoformat()
-    result = service.events().list(
-        calendarId="primary", timeMin=now, maxResults=10,
-        singleEvents=True, orderBy="startTime",
-    ).execute()
-
-    event = next(
-        (e for e in result.get("items", []) if "dateTime" in e.get("start", {})),
-        None,
-    )
+    event = await _get_next_event(creds)
     if not event:
         raise ValueError("No upcoming timed event found")
 
@@ -172,19 +215,10 @@ async def _gcal_push_event(user_id: str, params: dict) -> None:
 
 
 async def _gcal_cancel_event(user_id: str, params: dict) -> None:
-    creds = await _get_google_creds(user_id)
+    creds = await get_google_creds(user_id)
     service = build("calendar", "v3", credentials=creds)
 
-    now = datetime.now(timezone.utc).isoformat()
-    result = service.events().list(
-        calendarId="primary", timeMin=now, maxResults=10,
-        singleEvents=True, orderBy="startTime",
-    ).execute()
-
-    event = next(
-        (e for e in result.get("items", []) if "dateTime" in e.get("start", {})),
-        None,
-    )
+    event = await _get_next_event(creds)
     if not event:
         raise ValueError("No upcoming timed event found to cancel")
 
@@ -225,11 +259,12 @@ async def _slack_send(user_id: str, params: dict, action: str) -> None:
 # ─────────────────────────────────────────────
 
 _OAUTH_HANDLERS: dict[tuple[str, str], Any] = {
-    ("gmail",            "send_email"):   _gmail_send_email,
-    ("gmail",            "draft_email"):  _gmail_draft_email,
-    ("google_calendar",  "create_event"): _gcal_create_event,
-    ("google_calendar",  "push_event"):   _gcal_push_event,
-    ("google_calendar",  "cancel_event"): _gcal_cancel_event,
+    ("gmail",            "send_email"):    _gmail_send_email,
+    ("gmail",            "draft_email"):   _gmail_draft_email,
+    ("gmail",            "search_email"):  _gmail_search_email,
+    ("google_calendar",  "create_event"):  _gcal_create_event,
+    ("google_calendar",  "push_event"):    _gcal_push_event,
+    ("google_calendar",  "cancel_event"):  _gcal_cancel_event,
 }
 
 _SLACK_ACTIONS = {"send_dm", "send_channel"}
@@ -247,10 +282,12 @@ async def execute_workflow(user_id: str, steps: list[dict[str, Any]]) -> dict[st
         for step in steps:
             app    = step.get("app", "")
             action = step.get("action", "")
-            resolved = {k: _resolve(v) for k, v in step.get("params", {}).items()}
-            label = f"{app}.{action}"
+            label  = f"{app}.{action}"
+            resolved: dict = {}
 
             try:
+                resolved = await _resolve_params(user_id, step.get("params", {}))
+
                 # OAuth path — Google
                 handler = _OAUTH_HANDLERS.get((app, action))
                 if handler:
