@@ -63,6 +63,7 @@ class AudioCaptureService : Service() {
         var lastActiveTime = System.currentTimeMillis()
 
         apiClient.startAudio(chunkId, userId)
+        delay(300) // mic handoff: give SpeechRecognizer time to fully release
 
         // Two sibling coroutines: one streams audio, one watches for silence.
         // When silence times out, the watcher cancels the stream job;

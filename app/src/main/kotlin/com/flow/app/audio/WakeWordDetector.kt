@@ -53,11 +53,7 @@ class WakeWordDetector(private val context: Context) {
         recognizer?.destroy()
         recognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
             setRecognitionListener(object : RecognitionListener {
-                override fun onPartialResults(partial: Bundle) {
-                    val matches = partial.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    matches?.firstOrNull { it.contains("flux", ignoreCase = true) }
-                        ?.let { onFluxDetected(it) }
-                }
+                override fun onPartialResults(partial: Bundle) = Unit
 
                 override fun onResults(results: Bundle) {
                     val matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
