@@ -30,7 +30,7 @@ import workflow_store
 import zapier_store
 import token_store
 from executor import execute_workflow, execute_workflow_stream
-from ai.classifier import classify
+from ai.classifier import classify, classify_for_user
 from ai.validator import validate
 
 SLACK_CLIENT_ID      = os.environ.get("SLACK_CLIENT_ID", "")
@@ -69,6 +69,7 @@ _GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/calendar",
     "https://www.googleapis.com/auth/contacts.readonly",
+    "https://www.googleapis.com/auth/drive",
     "openid",
     "email",
 ]
@@ -317,10 +318,15 @@ def _contains_workflow(transcript: str) -> bool:
 async def _create_workflow_from_transcript(user_id: str, transcript: str) -> dict:
     logger.info("[audio/workflow] classifying transcript=%r user=%s", transcript, user_id)
     try:
-        workflow = await asyncio.to_thread(classify, transcript)
+        workflow = await classify_for_user(transcript, user_id)
     except Exception as exc:
         logger.error("[audio/workflow] classify failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=502, detail=f"Workflow classification failed: {exc}")
+
+    if workflow.get("intent") == "denied":
+        reason = workflow.get("denial_reason", "None of your connected apps can handle that request.")
+        logger.info("[audio/workflow] denied: %s user=%s", reason, user_id)
+        return {"workflow_status": "denied", "workflow_message": reason}
 
     validation_errors = validate(workflow)
     if validation_errors:
@@ -651,14 +657,18 @@ async def workflow_create(payload: WorkflowCreateRequest):
       - steps           (app/action/params for each action)
     Both are saved to MongoDB and returned.
     """
-    # 1. Classify — runs synchronously against Gemini, off the event loop
+    # 1. Classify with per-user app filtering
     logger.info("[workflow/create] classifying transcript=%r user=%s",
                 payload.transcript, payload.user_id)
     try:
-        workflow = await asyncio.to_thread(classify, payload.transcript)
+        workflow = await classify_for_user(payload.transcript, payload.user_id)
     except Exception as exc:
         logger.error("[workflow/create] classify failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=502, detail=f"Classification failed: {exc}")
+
+    if workflow.get("intent") == "denied":
+        reason = workflow.get("denial_reason", "None of your connected apps can handle that request.")
+        raise HTTPException(status_code=422, detail={"intent": "denied", "reason": reason})
 
     # 2. Soft-validate (never blocks — just surfaces errors to the caller)
     errors = validate(workflow)
@@ -787,6 +797,28 @@ async def list_user_webhooks(user_id: str):
     return {"webhooks": webhooks}
 
 
+class DominosCredentialsRequest(BaseModel):
+    firstName: str
+    lastName:  str = ""
+    email:     str = ""
+    phone:     str = ""
+    address:   str
+
+
+@app.post("/user/{user_id}/credentials/dominos")
+async def save_dominos_credentials(user_id: str, payload: DominosCredentialsRequest):
+    """Save Domino's delivery info for a user."""
+    await token_store.save_token(user_id, "dominos", {
+        "firstName": payload.firstName.strip(),
+        "lastName":  payload.lastName.strip(),
+        "email":     payload.email.strip(),
+        "phone":     payload.phone.strip(),
+        "address":   payload.address.strip(),
+    })
+    logger.info("[credentials/dominos] saved user=%s", user_id)
+    return {"status": "ok"}
+
+
 @app.delete("/user/{user_id}/webhooks/{app}/{action}")
 async def delete_user_webhook(user_id: str, app: str, action: str):
     """Remove a webhook for a specific app+action."""
@@ -815,9 +847,21 @@ async def workflow_preview(payload: WorkflowPreviewRequest):
     """Classify a prompt → workflow JSON (no persistence). Used by /run page."""
     logger.info("[workflow/preview] user=%s prompt=%r", payload.user_id, payload.prompt)
     try:
-        workflow = await asyncio.to_thread(classify, payload.prompt)
+        workflow = await classify_for_user(payload.prompt, payload.user_id)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Classification failed: {exc}")
+
+    if workflow.get("intent") == "denied":
+        reason = workflow.get("denial_reason", "None of your connected apps can handle that request.")
+        return {
+            "intent":         "denied",
+            "denial_reason":  reason,
+            "trigger_phrase": "",
+            "steps":          [],
+            "missing_params": [],
+            "confidence":     0.0,
+            "validation_errors": [],
+        }
 
     errors = validate(workflow)
     return {

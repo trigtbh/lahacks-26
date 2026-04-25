@@ -13,7 +13,7 @@ const APPS = [
   { id:"github",  group:"zapier", category:"Dev",          label:"GitHub",    desc:"Open & comment on issues",     icon:"https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",                                                                   color:"#f0f0f0", auth:"zapier" },
   { id:"spotify", group:"zapier", category:"Entertainment",label:"Spotify",   desc:"Play, pause & control music",  icon:"https://upload.wikimedia.org/wikipedia/commons/1/19/Spotify_logo_without_text.svg",                                                          color:"#1DB954", auth:"zapier" },
   { id:"uber",    group:"zapier", category:"Transport",    label:"Uber",      desc:"Request rides by voice",       icon:"https://upload.wikimedia.org/wikipedia/commons/c/cc/Uber_logo_2018.png",                                                                     color:"#ffffff", auth:"zapier" },
-  { id:"dominos", group:"zapier", category:"Food",         label:"Domino's",  desc:"Order & reorder pizza",        icon:"https://upload.wikimedia.org/wikipedia/commons/3/3b/Domino%27s_pizza_logo.svg",                                                             color:"#006491", auth:"zapier" },
+  { id:"dominos", group:"dominos", category:"Food",         label:"Domino's",  desc:"Order & reorder pizza",        icon:"/dominos.svg",                                                                                                                          color:"#006491", auth:"dominos" },
 ];
 
 const CATEGORIES = ["All", ...new Set(APPS.map(a => a.category))];
@@ -147,7 +147,7 @@ function SelectStep({ selected, setSelected, onNext }) {
               onClick={() => toggle(app.id)} style={{ "--app-color": app.color, animationDelay:`${i*30}ms` }}>
               <div className="tile-glow" />
               <div className="tile-top">
-                <img src={app.icon} alt={app.label} className="tile-icon" onError={e => e.target.style.opacity=0} />
+                <img src={app.icon} alt={app.label} className={`tile-icon${app.id === "dominos" ? " tile-icon--lg" : ""}`} onError={e => e.target.style.opacity=0} />
                 <div className={`tile-check ${sel?"tile-check--visible":""}`}>✓</div>
               </div>
               <div className="tile-name">{app.label}</div>
@@ -170,6 +170,46 @@ function SelectStep({ selected, setSelected, onNext }) {
   );
 }
 
+function DominosCredForm({ appId, userId, onSaved }) {
+  const [fields, setFields] = useState({ firstName: "", lastName: "", email: "", phone: "", address: "" });
+  const [saving, setSaving] = useState(false);
+
+  const set = k => e => setFields(p => ({ ...p, [k]: e.target.value }));
+  const canSave = fields.firstName.trim() && fields.address.trim();
+
+  async function submit() {
+    if (!canSave) return;
+    setSaving(true);
+    try {
+      await fetch(`${API_BASE}/user/${userId}/credentials/dominos`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(fields),
+      });
+      onSaved(appId);
+    } catch (_) {}
+    setSaving(false);
+  }
+
+  return (
+    <div className="cred-form">
+      <div className="cred-row">
+        <input className="text-input text-input--xs" placeholder="First name"
+          value={fields.firstName} onChange={set("firstName")} />
+        <input className="text-input text-input--xs" placeholder="Last name"
+          value={fields.lastName} onChange={set("lastName")} />
+      </div>
+      <input className="text-input text-input--xs" placeholder="Email"
+        value={fields.email} onChange={set("email")} />
+      <input className="text-input text-input--xs" placeholder="Phone"
+        value={fields.phone} onChange={set("phone")} />
+      <input className="text-input text-input--xs" placeholder="Delivery address"
+        value={fields.address} onChange={set("address")} />
+      <button className="btn-save" disabled={!canSave || saving} onClick={submit}>Save</button>
+    </div>
+  );
+}
+
 function ConnectStep({ selected, userId, connected, onRefresh, onDone, onBack }) {
   const popupRef = useRef(null);
   const [webhooks, setWebhooks] = useState({});
@@ -177,9 +217,10 @@ function ConnectStep({ selected, userId, connected, onRefresh, onDone, onBack })
   const [saving, setSaving]     = useState(false);
 
   const neededGroups = [...new Set(
-    APPS.filter(a => selected.has(a.id) && a.auth !== "zapier").map(a => a.auth)
+    APPS.filter(a => selected.has(a.id) && !["zapier","dominos"].includes(a.auth)).map(a => a.auth)
   )];
-  const zapierApps = APPS.filter(a => selected.has(a.id) && a.auth === "zapier");
+  const zapierApps  = APPS.filter(a => selected.has(a.id) && a.auth === "zapier");
+  const dominosApps = APPS.filter(a => selected.has(a.id) && a.auth === "dominos");
 
   function openOAuth(group) {
     popupRef.current = window.open(AUTH_GROUPS[group].authUrl(userId), "oauth", "width=520,height=680");
@@ -249,6 +290,23 @@ function ConnectStep({ selected, userId, connected, onRefresh, onDone, onBack })
                 </div>
               )
             }
+          </div>
+        ))}
+
+        {dominosApps.map(app => (
+          <div key={app.id} className={`connect-card connect-card--col ${saved.has(app.id)?"connect-card--done":""}`}>
+            <div className="cc-left">
+              <img src={app.icon} alt={app.label} className="cc-icon" onError={e=>e.target.style.opacity=0} />
+              <div>
+                <div className="cc-label">{app.label}</div>
+                <div className="cc-apps">Domino's account</div>
+              </div>
+              {saved.has(app.id) && <span className="badge badge--ok" style={{marginLeft:"auto"}}>✓ Saved</span>}
+            </div>
+            {!saved.has(app.id) && (
+              <DominosCredForm appId={app.id} userId={userId}
+                onSaved={id => setSaved(prev => new Set([...prev, id]))} />
+            )}
           </div>
         ))}
       </div>
