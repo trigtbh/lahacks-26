@@ -500,6 +500,7 @@ body::after {
 .cred-form .btn-save { align-self: flex-end; }
 .cred-row { display: flex; gap: 8px; }
 .cred-row .text-input { flex: 1; min-width: 0; }
+.cred-section-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-top: 2px; }
 
 .connect-footer {
   display: flex; align-items: center; justify-content: space-between;

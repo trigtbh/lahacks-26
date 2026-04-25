@@ -798,24 +798,36 @@ async def list_user_webhooks(user_id: str):
 
 
 class DominosCredentialsRequest(BaseModel):
-    firstName: str
-    lastName:  str = ""
-    email:     str = ""
-    phone:     str = ""
-    address:   str
+    firstName:      str
+    lastName:       str = ""
+    email:          str = ""
+    phone:          str = ""
+    address:        str
+    cardNumber:     str = ""
+    cardExpiration: str = ""
+    cardCvv:        str = ""
+    cardZip:        str = ""
 
 
 @app.post("/user/{user_id}/credentials/dominos")
 async def save_dominos_credentials(user_id: str, payload: DominosCredentialsRequest):
-    """Save Domino's delivery info for a user."""
-    await token_store.save_token(user_id, "dominos", {
+    """Save Domino's delivery info and optional payment card for a user."""
+    data: dict = {
         "firstName": payload.firstName.strip(),
         "lastName":  payload.lastName.strip(),
         "email":     payload.email.strip(),
         "phone":     payload.phone.strip(),
         "address":   payload.address.strip(),
-    })
-    logger.info("[credentials/dominos] saved user=%s", user_id)
+    }
+    if payload.cardNumber.strip():
+        data["card"] = {
+            "number":     payload.cardNumber.strip(),
+            "expiration": payload.cardExpiration.strip(),
+            "cvv":        payload.cardCvv.strip(),
+            "zip":        payload.cardZip.strip(),
+        }
+    await token_store.save_token(user_id, "dominos", data)
+    logger.info("[credentials/dominos] saved user=%s has_card=%s", user_id, bool(payload.cardNumber))
     return {"status": "ok"}
 
 

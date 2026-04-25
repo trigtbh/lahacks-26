@@ -316,19 +316,30 @@ async def _dominos_order_pizza(user_id: str, params: dict) -> dict:
 
     items = params.get("items") or [_build_dominos_item(params)]
 
+    address = params.get("address") or creds.get("address", "")
+    if not address or address.startswith("user."):
+        address = creds.get("address", "")
+    if not address:
+        raise ValueError("No delivery address — set one in Domino's credentials")
+
     payload = {
-        "address":   params.get("address")   or creds.get("address", ""),
+        "address":   address,
         "firstName": params.get("firstName") or creds.get("firstName", "Customer"),
         "lastName":  params.get("lastName")  or creds.get("lastName", ""),
         "phone":     params.get("phone")     or creds.get("phone", "555-555-5555"),
         "email":     creds.get("email", ""),
         "items":     items,
     }
-    if not payload["address"]:
-        raise ValueError("No delivery address — set one in Domino's credentials")
 
-    if params.get("payment"):
-        payload["payment"] = params["payment"]
+    card = params.get("payment") or (creds.get("card") if creds.get("card", {}).get("number") else None)
+    if card:
+        payload["payment"] = {
+            "number":       card.get("number", ""),
+            "expiration":   card.get("expiration", card.get("cardExpiration", "")),
+            "securityCode": card.get("cvv", card.get("cardCvv", "")),
+            "postalCode":   card.get("zip", card.get("cardZip", "")),
+            "tipAmount":    card.get("tipAmount", 3),
+        }
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(f"{_DOMINOS_SERVICE_URL}/order", json=payload)

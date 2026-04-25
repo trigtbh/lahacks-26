@@ -171,11 +171,14 @@ function SelectStep({ selected, setSelected, onNext }) {
 }
 
 function DominosCredForm({ appId, userId, onSaved }) {
-  const [fields, setFields] = useState({ firstName: "", lastName: "", email: "", phone: "", address: "" });
+  const [fields, setFields] = useState({
+    firstName: "", lastName: "", email: "", phone: "", address: "",
+    cardNumber: "", cardExpiration: "", cardCvv: "", cardZip: "",
+  });
   const [saving, setSaving] = useState(false);
 
   const set = k => e => setFields(p => ({ ...p, [k]: e.target.value }));
-  const canSave = fields.firstName.trim() && fields.address.trim();
+  const canSave = fields.firstName.trim() && fields.address.trim() && fields.phone.trim();
 
   async function submit() {
     if (!canSave) return;
@@ -193,19 +196,35 @@ function DominosCredForm({ appId, userId, onSaved }) {
 
   return (
     <div className="cred-form">
+      <div className="cred-section-label">Delivery info</div>
       <div className="cred-row">
-        <input className="text-input text-input--xs" placeholder="First name"
+        <input className="text-input text-input--xs" placeholder="First name *"
           value={fields.firstName} onChange={set("firstName")} />
         <input className="text-input text-input--xs" placeholder="Last name"
           value={fields.lastName} onChange={set("lastName")} />
       </div>
       <input className="text-input text-input--xs" placeholder="Email"
         value={fields.email} onChange={set("email")} />
-      <input className="text-input text-input--xs" placeholder="Phone"
+      <input className="text-input text-input--xs" placeholder="Phone *"
         value={fields.phone} onChange={set("phone")} />
-      <input className="text-input text-input--xs" placeholder="Delivery address"
+      <input className="text-input text-input--xs" placeholder="Delivery address *"
         value={fields.address} onChange={set("address")} />
-      <button className="btn-save" disabled={!canSave || saving} onClick={submit}>Save</button>
+
+      <div className="cred-section-label" style={{marginTop:4}}>Payment (optional — needed to place orders)</div>
+      <input className="text-input text-input--xs" placeholder="Card number"
+        value={fields.cardNumber} onChange={set("cardNumber")} />
+      <div className="cred-row">
+        <input className="text-input text-input--xs" placeholder="MM/YY"
+          value={fields.cardExpiration} onChange={set("cardExpiration")} />
+        <input className="text-input text-input--xs" placeholder="CVV"
+          value={fields.cardCvv} onChange={set("cardCvv")} />
+        <input className="text-input text-input--xs" placeholder="ZIP"
+          value={fields.cardZip} onChange={set("cardZip")} />
+      </div>
+
+      <button className="btn-save" disabled={!canSave || saving} onClick={submit}>
+        {saving ? "Saving…" : "Save"}
+      </button>
     </div>
   );
 }
