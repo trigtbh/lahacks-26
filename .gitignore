@@ -1,2 +1,17 @@
+<<<<<<< HEAD
 venv/
 .env*
+=======
+.env
+local.properties
+*.iml
+.gradle/
+.idea/
+build/
+app/build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.keystore
+google-services.json
+>>>>>>> 10a6157 (Did some stuff)
