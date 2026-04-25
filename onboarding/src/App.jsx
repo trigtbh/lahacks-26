@@ -1,171 +1,203 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import "./App.css";
 
 const API_BASE = "http://149.248.10.229:8000";
 
-const APPS = [
-  {
-    id: "gmail",
-    label: "Gmail",
-    icon: "https://upload.wikimedia.org/wikipedia/commons/7/7e/Gmail_icon_%282020%29.svg",
-    actions: [
-      { id: "send_email",  label: "Send Email",  params: "to, subject, body" },
-      { id: "draft_email", label: "Draft Email", params: "to, subject, body" },
-    ],
+const STEPS = ["welcome", "google", "slack", "done"];
+
+const SERVICE_META = {
+  google: {
+    label: "Google",
+    icon: "https://upload.wikimedia.org/wikipedia/commons/c/c1/Google_%22G%22_logo.svg",
+    unlocks: ["Send emails via Gmail", "Create calendar events", "Push & cancel meetings"],
+    authUrl: (uid) => `${API_BASE}/auth/google?user_id=${uid}`,
   },
-  {
-    id: "google_calendar",
-    label: "Google Calendar",
-    icon: "https://upload.wikimedia.org/wikipedia/commons/a/a5/Google_Calendar_icon_%282020%29.svg",
-    actions: [
-      { id: "create_event", label: "Create Event", params: "title, start_time, end_time, attendees" },
-      { id: "push_event",   label: "Push Event",   params: "event_ref, by_minutes" },
-      { id: "cancel_event", label: "Cancel Event", params: "event_ref" },
-    ],
-  },
-  {
-    id: "slack",
+  slack: {
     label: "Slack",
     icon: "https://upload.wikimedia.org/wikipedia/commons/d/d5/Slack_icon_2019.svg",
-    actions: [
-      { id: "send_dm",      label: "Send DM",      params: "to, message" },
-      { id: "send_channel", label: "Send Channel", params: "channel, message" },
-    ],
+    unlocks: ["Send messages to any channel", "Send direct messages"],
+    authUrl: (uid) => `${API_BASE}/auth/slack?user_id=${uid}`,
   },
-];
+};
 
-export default function App() {
-  const [userId, setUserId]     = useState("akshai");
-  const [selected, setSelected] = useState(new Set());
-  const [webhooks, setWebhooks] = useState({});
-  const [saving, setSaving]     = useState(false);
-  const [results, setResults]   = useState([]);
+function useConnections(userId) {
+  const [connected, setConnected] = useState(new Set());
+  const [loading, setLoading] = useState(false);
 
-  function toggleApp(appId) {
-    setSelected(prev => {
-      const next = new Set(prev);
-      next.has(appId) ? next.delete(appId) : next.add(appId);
-      return next;
-    });
+  async function refresh() {
+    if (!userId) return;
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/user/${userId}/connections`);
+      const data = await res.json();
+      setConnected(new Set(data.connected || []));
+    } catch (_) {}
+    setLoading(false);
   }
 
-  function setUrl(app, action, url) {
-    setWebhooks(prev => ({ ...prev, [`${app}.${action}`]: url }));
-  }
+  useEffect(() => { refresh(); }, [userId]);
+  return { connected, refresh, loading };
+}
 
-  async function save() {
-    if (!userId.trim()) return;
-    setSaving(true);
-    setResults([]);
+// ── Welcome ──────────────────────────────────────────────────────────────────
 
-    const entries = [];
-    for (const app of APPS) {
-      if (!selected.has(app.id)) continue;
-      for (const action of app.actions) {
-        const url = webhooks[`${app.id}.${action.id}`]?.trim();
-        if (url) entries.push({ app: app.id, action: action.id, url, label: `${app.label} – ${action.label}` });
-      }
-    }
-
-    const out = await Promise.all(
-      entries.map(async ({ app, action, url, label }) => {
-        try {
-          const res = await fetch(`${API_BASE}/user/${userId}/webhooks`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ app, action, webhook_url: url }),
-          });
-          return { label, ok: res.ok, error: res.ok ? null : `HTTP ${res.status}` };
-        } catch (e) {
-          return { label, ok: false, error: e.message };
-        }
-      })
-    );
-
-    setResults(out);
-    setSaving(false);
-  }
-
-  const anyFilled = APPS.some(app =>
-    selected.has(app.id) &&
-    app.actions.some(a => webhooks[`${app.id}.${a.id}`]?.trim())
-  );
-
+function WelcomeStep({ userId, setUserId, onNext }) {
   return (
-    <div className="container">
-      <div className="header">
-        <h1>Flow</h1>
-        <p>Connect your apps via Zapier webhooks</p>
-      </div>
-
-      <div className="card">
-        <label className="field-label">User ID</label>
+    <div className="step">
+      <div className="step-icon-large">◈</div>
+      <h1 className="step-title">Welcome to Flow</h1>
+      <p className="step-body">
+        Voice-powered automations through your Ray-Ban glasses.<br />
+        Let's connect your apps — takes about 60 seconds.
+      </p>
+      <div className="field">
+        <label className="field-label">Your user ID</label>
         <input
           className="text-input"
           value={userId}
           onChange={e => setUserId(e.target.value)}
           placeholder="akshai"
+          autoFocus
         />
       </div>
+      <button className="btn-primary" onClick={onNext} disabled={!userId.trim()}>
+        Get started →
+      </button>
+    </div>
+  );
+}
 
-      <p className="section-label">Select apps to configure</p>
-      <div className="app-row">
-        {APPS.map(app => (
-          <button
-            key={app.id}
-            className={`app-btn ${selected.has(app.id) ? "app-btn--active" : ""}`}
-            onClick={() => toggleApp(app.id)}
-          >
-            <img src={app.icon} alt={app.label} className="app-icon" />
-            <span>{app.label}</span>
-          </button>
+// ── Connect step (Google or Slack) ────────────────────────────────────────────
+
+function ConnectStep({ service, userId, connected, onRefresh, onNext, onSkip }) {
+  const meta = SERVICE_META[service];
+  const isConnected = connected.has(service);
+  const popupRef = useRef(null);
+
+  function openOAuth() {
+    popupRef.current = window.open(
+      meta.authUrl(userId),
+      "oauth",
+      "width=520,height=680,left=200,top=100"
+    );
+    const timer = setInterval(() => {
+      if (popupRef.current?.closed) {
+        clearInterval(timer);
+        onRefresh();
+      }
+    }, 600);
+  }
+
+  return (
+    <div className="step">
+      <img src={meta.icon} alt={meta.label} className="service-icon" />
+      <h2 className="step-title">Connect {meta.label}</h2>
+      <p className="step-body">Flow will be able to:</p>
+      <ul className="unlocks">
+        {meta.unlocks.map(u => (
+          <li key={u}><span className="unlock-dot">✦</span>{u}</li>
         ))}
-      </div>
+      </ul>
 
-      {APPS.filter(app => selected.has(app.id)).map(app => (
-        <div key={app.id} className="card">
-          <div className="card-header">
-            <img src={app.icon} alt={app.label} className="card-icon" />
-            <span className="card-title">{app.label}</span>
-          </div>
-          {app.actions.map(action => (
-            <div key={action.id} className="action-row">
-              <div className="action-meta">
-                <span className="action-name">{action.label}</span>
-                <span className="action-params">sends: {action.params}</span>
-              </div>
-              <input
-                className="text-input webhook-input"
-                placeholder="https://hooks.zapier.com/hooks/catch/..."
-                value={webhooks[`${app.id}.${action.id}`] || ""}
-                onChange={e => setUrl(app.id, action.id, e.target.value)}
-              />
-            </div>
-          ))}
-        </div>
-      ))}
-
-      {selected.size > 0 && (
-        <button
-          className={`save-btn ${(!anyFilled || saving) ? "save-btn--disabled" : ""}`}
-          onClick={save}
-          disabled={saving || !anyFilled}
-        >
-          {saving ? "Saving…" : "Save Webhooks"}
+      {isConnected ? (
+        <div className="connected-badge">✓ {meta.label} connected</div>
+      ) : (
+        <button className="btn-service" onClick={openOAuth}>
+          <img src={meta.icon} alt="" className="btn-service-icon" />
+          Sign in with {meta.label}
         </button>
       )}
 
-      {results.length > 0 && (
-        <div className="results">
-          {results.map((r, i) => (
-            <div key={i} className={`result-row ${r.ok ? "result-row--ok" : "result-row--err"}`}>
-              <span className="result-dot">{r.ok ? "✓" : "✗"}</span>
-              <span>{r.label}</span>
-              {r.error && <span className="result-error">{r.error}</span>}
+      <div className="step-nav">
+        {isConnected
+          ? <button className="btn-primary" onClick={onNext}>Continue →</button>
+          : <button className="btn-ghost" onClick={onSkip}>Skip for now</button>
+        }
+      </div>
+    </div>
+  );
+}
+
+// ── Done ──────────────────────────────────────────────────────────────────────
+
+function DoneStep({ connected }) {
+  const services = [...connected];
+  return (
+    <div className="step">
+      <div className="step-icon-large done-icon">✓</div>
+      <h2 className="step-title">You're all set</h2>
+      <p className="step-body">
+        Put on your glasses and say <em>"Hey Flow"</em> to get started.
+      </p>
+      {services.length > 0 && (
+        <div className="connected-summary">
+          {services.map(s => (
+            <div key={s} className="summary-row">
+              <img src={SERVICE_META[s]?.icon} alt={s} className="summary-icon" />
+              <span>{SERVICE_META[s]?.label}</span>
+              <span className="summary-check">✓</span>
             </div>
           ))}
         </div>
       )}
+      {services.length === 0 && (
+        <p className="step-body muted">No apps connected yet — you can always come back to this page.</p>
+      )}
+    </div>
+  );
+}
+
+// ── Progress bar ──────────────────────────────────────────────────────────────
+
+function Progress({ step }) {
+  const idx = STEPS.indexOf(step);
+  const total = STEPS.length - 1;
+  return (
+    <div className="progress-bar">
+      <div className="progress-fill" style={{ width: `${(idx / total) * 100}%` }} />
+    </div>
+  );
+}
+
+// ── App ───────────────────────────────────────────────────────────────────────
+
+export default function App() {
+  const [step, setStep] = useState("welcome");
+  const [userId, setUserId] = useState("akshai");
+  const { connected, refresh } = useConnections(userId);
+
+  const next = () => setStep(s => STEPS[STEPS.indexOf(s) + 1]);
+
+  return (
+    <div className="shell">
+      <div className="card">
+        {step !== "welcome" && step !== "done" && <Progress step={step} />}
+
+        {step === "welcome" && (
+          <WelcomeStep userId={userId} setUserId={setUserId} onNext={next} />
+        )}
+        {step === "google" && (
+          <ConnectStep
+            service="google"
+            userId={userId}
+            connected={connected}
+            onRefresh={refresh}
+            onNext={next}
+            onSkip={next}
+          />
+        )}
+        {step === "slack" && (
+          <ConnectStep
+            service="slack"
+            userId={userId}
+            connected={connected}
+            onRefresh={refresh}
+            onNext={next}
+            onSkip={next}
+          />
+        )}
+        {step === "done" && <DoneStep connected={connected} />}
+      </div>
     </div>
   );
 }

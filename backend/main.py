@@ -8,9 +8,13 @@ import struct
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlencode
+
+import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from elevenlabs.client import AsyncElevenLabs
 from deepgram import DeepgramClient, PrerecordedOptions
@@ -23,9 +27,25 @@ import session_store as sessions
 import asyncio
 import workflow_store
 import zapier_store
+import token_store
 from executor import execute_workflow
 from ai.classifier import classify
 from ai.validator import validate
+
+SLACK_CLIENT_ID      = os.environ.get("SLACK_CLIENT_ID", "")
+SLACK_CLIENT_SECRET  = os.environ.get("SLACK_CLIENT_SECRET", "")
+GOOGLE_CLIENT_ID     = os.environ.get("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+BACKEND_URL          = os.environ.get("BACKEND_URL", "http://149.248.10.229:8000")
+GOOGLE_REDIRECT_URI  = os.environ.get("GOOGLE_REDIRECT_URI", f"{BACKEND_URL}/auth/google/callback")
+
+_GOOGLE_SCOPES = [
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/calendar",
+    "openid",
+    "email",
+]
+_SLACK_USER_SCOPES = ["chat:write", "channels:read", "im:write"]
 
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
 ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")  # "George"
@@ -84,6 +104,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_ONBOARDING_DIR = _BASE_DIR / "static" / "onboarding"
+if _ONBOARDING_DIR.exists():
+    app.mount("/setup", StaticFiles(directory=_ONBOARDING_DIR, html=True), name="onboarding")
 
 # In-memory store: chunk_id -> {"chunks": [bytes, ...], "meta": {...}}
 recording_store: dict[str, dict] = {}
@@ -674,6 +698,119 @@ async def delete_user_webhook(user_id: str, app: str, action: str):
     """Remove a webhook for a specific app+action."""
     deleted = await zapier_store.delete_webhook(user_id, app, action)
     return {"deleted": deleted}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# OAUTH ENDPOINTS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_CONNECTED_HTML = """<!doctype html><html><head><meta charset="utf-8">
+<style>body{{font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#0f0f0f;color:#f0f0f0}}
+.box{{text-align:center}}.check{{font-size:48px}}</style></head>
+<body><div class="box"><div class="check">✓</div><h2>{service} connected</h2><p>You can close this tab.</p></div></body></html>"""
+
+
+# ── Google ────────────────────────────────────────────────────────────────────
+
+@app.get("/auth/google")
+async def auth_google(user_id: str):
+    params = {
+        "client_id":     GOOGLE_CLIENT_ID,
+        "redirect_uri":  GOOGLE_REDIRECT_URI,
+        "response_type": "code",
+        "scope":         " ".join(_GOOGLE_SCOPES),
+        "access_type":   "offline",
+        "prompt":        "consent",
+        "state":         user_id,
+    }
+    return RedirectResponse("https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params))
+
+
+async def _handle_google_callback(code: str, state: str):
+    """Shared logic for both Google callback paths."""
+    user_id = state
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "code":          code,
+                "client_id":     GOOGLE_CLIENT_ID,
+                "client_secret": GOOGLE_CLIENT_SECRET,
+                "redirect_uri":  GOOGLE_REDIRECT_URI,
+                "grant_type":    "authorization_code",
+            },
+        )
+    data = resp.json()
+    if "error" in data:
+        raise HTTPException(status_code=400, detail=data["error"])
+
+    await token_store.save_token(user_id, "google", {
+        "access_token":  data["access_token"],
+        "refresh_token": data.get("refresh_token"),
+        "token_uri":     "https://oauth2.googleapis.com/token",
+        "scopes":        _GOOGLE_SCOPES,
+    })
+    logger.info("[auth/google] token saved user=%s", user_id)
+    return HTMLResponse(_CONNECTED_HTML.format(service="Google"))
+
+
+@app.get("/auth/google/callback")
+async def auth_google_callback(code: str, state: str):
+    return await _handle_google_callback(code, state)
+
+
+@app.get("/connect/google/redirect")
+async def connect_google_redirect(code: str, state: str):
+    return await _handle_google_callback(code, state)
+
+
+# ── Slack ─────────────────────────────────────────────────────────────────────
+
+@app.get("/auth/slack")
+async def auth_slack(user_id: str):
+    params = {
+        "client_id":    SLACK_CLIENT_ID,
+        "scope":        "",
+        "user_scope":   " ".join(_SLACK_USER_SCOPES),
+        "redirect_uri": f"{BACKEND_URL}/auth/slack/callback",
+        "state":        user_id,
+    }
+    return RedirectResponse("https://slack.com/oauth/v2/authorize?" + urlencode(params))
+
+
+@app.get("/auth/slack/callback")
+async def auth_slack_callback(code: str, state: str):
+    user_id = state
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://slack.com/api/oauth.v2.access",
+            data={
+                "client_id":     SLACK_CLIENT_ID,
+                "client_secret": SLACK_CLIENT_SECRET,
+                "code":          code,
+                "redirect_uri":  f"{BACKEND_URL}/auth/slack/callback",
+            },
+        )
+    data = resp.json()
+    if not data.get("ok"):
+        raise HTTPException(status_code=400, detail=data.get("error", "Slack OAuth failed"))
+
+    user_token = data.get("authed_user", {}).get("access_token")
+    await token_store.save_token(user_id, "slack", {
+        "access_token": user_token,
+        "team_id":      data.get("team", {}).get("id"),
+    })
+    logger.info("[auth/slack] token saved user=%s", user_id)
+    return HTMLResponse(_CONNECTED_HTML.format(service="Slack"))
+
+
+# ── Connection status ─────────────────────────────────────────────────────────
+
+@app.get("/user/{user_id}/connections")
+async def get_connections(user_id: str):
+    """Return which services the user has connected via OAuth."""
+    services = await token_store.list_connections(user_id)
+    return {"connected": services}
 
 
 if __name__ == "__main__":
