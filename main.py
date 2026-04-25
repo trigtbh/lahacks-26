@@ -48,7 +48,7 @@ def _build_wav(pcm_data: bytes, sample_rate: int, channels: int, bit_depth: int 
     return header + pcm_data
 
 
-@app.post("/transcribe")
+@app.post("/audio/stream")
 async def transcribe_audio(request: Request):
     """
     Receive a complete audio transmission as raw application/octet-stream
