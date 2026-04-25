@@ -14,7 +14,7 @@ from urllib.parse import urlencode, urlparse
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -30,7 +30,7 @@ import asyncio
 import workflow_store
 import zapier_store
 import token_store
-from executor import execute_workflow
+from executor import execute_workflow, execute_workflow_stream
 from ai.classifier import classify
 from ai.validator import validate
 
@@ -67,6 +67,7 @@ if not GOOGLE_CLIENT_SECRET:
 _GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/contacts.readonly",
     "openid",
     "email",
 ]
@@ -160,7 +161,8 @@ async def lifespan(app: FastAPI):
     start_gateway()
     yield
 
-_BASE_DIR = Path(__file__).parent / "static" / "onboarding"
+_BASE_DIR       = Path(__file__).parent
+_ONBOARDING_DIR = _BASE_DIR / "static" / "onboarding"
 
 app = FastAPI(lifespan=lifespan)
 
@@ -171,9 +173,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_ONBOARDING_DIR = _BASE_DIR / "static" / "onboarding"
-if _ONBOARDING_DIR.exists():
-    app.mount("/setup", StaticFiles(directory=_ONBOARDING_DIR, html=True), name="onboarding")
 
 # In-memory store: chunk_id -> {"chunks": [bytes, ...], "meta": {...}}
 recording_store: dict[str, dict] = {}
@@ -183,10 +182,6 @@ class AudioSessionRequest(BaseModel):
     chunk_id: str
     user_id: str
 
-
-@app.get("/")
-async def serve_index():
-    return FileResponse(_BASE_DIR / "index.html")
 
 
 # ---------------------------------------------------------------------------
@@ -799,6 +794,62 @@ async def delete_user_webhook(user_id: str, app: str, action: str):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# TEXT RUNNER ENDPOINTS  (/run page + preview + execute-stream)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/run", response_class=HTMLResponse)
+async def run_page():
+    """Serve the interactive workflow runner UI."""
+    html_path = _BASE_DIR / "run_page.html"
+    return HTMLResponse(html_path.read_text())
+
+
+class WorkflowPreviewRequest(BaseModel):
+    user_id: str
+    prompt:  str
+
+
+@app.post("/workflow/preview")
+async def workflow_preview(payload: WorkflowPreviewRequest):
+    """Classify a prompt → workflow JSON (no persistence). Used by /run page."""
+    logger.info("[workflow/preview] user=%s prompt=%r", payload.user_id, payload.prompt)
+    try:
+        workflow = await asyncio.to_thread(classify, payload.prompt)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Classification failed: {exc}")
+
+    errors = validate(workflow)
+    return {
+        "trigger_phrase":    workflow.get("trigger_phrase", ""),
+        "steps":             workflow.get("steps", []),
+        "missing_params":    workflow.get("missing_params", []),
+        "confidence":        workflow.get("confidence"),
+        "validation_errors": errors,
+    }
+
+
+class WorkflowExecuteStreamRequest(BaseModel):
+    user_id: str
+    steps:   list
+
+
+@app.post("/workflow/execute-stream")
+async def workflow_execute_stream(payload: WorkflowExecuteStreamRequest):
+    """Execute workflow steps one-by-one, streaming SSE events per step."""
+    import json
+
+    async def event_stream():
+        async for event in execute_workflow_stream(payload.user_id, payload.steps):
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # OAUTH ENDPOINTS
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -938,6 +989,9 @@ async def get_connections(user_id: str):
     services = await token_store.list_connections(user_id)
     return {"connected": services}
 
+
+if _ONBOARDING_DIR.exists():
+    app.mount("/", StaticFiles(directory=_ONBOARDING_DIR, html=True), name="onboarding")
 
 if __name__ == "__main__":
     import uvicorn
