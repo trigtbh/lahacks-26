@@ -12,3 +12,5 @@ captures/
 *.keystore
 google-services.json
 __pycache__/
+
+credentials.json

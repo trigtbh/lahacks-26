@@ -20,6 +20,9 @@ data class FlowUiState(
     val statusMessage: String = "Waiting for permissions...",
     val triggerMessage: String = "",
     val workflowCommand: String = "",
+    val lastTranscript: String = "",
+    val debugMessage: String = "",
+    val errorMessage: String = "",
 )
 
 class FlowViewModel(app: Application) : AndroidViewModel(app) {
@@ -41,9 +44,30 @@ class FlowViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         viewModelScope.launch {
+            FluxEvents.speechCaptured.collect { transcript ->
+                _uiState.value = _uiState.value.copy(
+                    lastTranscript = transcript,
+                    errorMessage = "",
+                )
+            }
+        }
+        viewModelScope.launch {
+            FluxEvents.debugStatus.collect { message ->
+                _uiState.value = _uiState.value.copy(debugMessage = message)
+            }
+        }
+        viewModelScope.launch {
+            FluxEvents.errorMessage.collect { message ->
+                _uiState.value = _uiState.value.copy(
+                    errorMessage = message,
+                    statusMessage = "Capture error",
+                )
+            }
+        }
+        viewModelScope.launch {
             FluxEvents.sessionEnded.collect {
                 _uiState.value = _uiState.value.copy(
-                    statusMessage = "Listening...",
+                    statusMessage = "Listening on glasses...",
                     workflowCommand = "",
                 )
             }
@@ -78,7 +102,8 @@ class FlowViewModel(app: Application) : AndroidViewModel(app) {
     fun onPermissionsGranted() {
         _uiState.value = _uiState.value.copy(
             isReady = true,
-            statusMessage = "Listening..."
+            statusMessage = "Listening on glasses...",
+            debugMessage = "Starting glasses-only capture",
         )
 
         val audioAttrs = AudioAttributes.Builder()

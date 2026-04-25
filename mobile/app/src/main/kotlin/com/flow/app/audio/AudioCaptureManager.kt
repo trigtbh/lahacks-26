@@ -28,11 +28,13 @@ class AudioCaptureManager {
         const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
         const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
         const val CHUNK_DURATION_MS = 100   // emit a chunk every 100ms
+        const val BYTES_PER_SAMPLE = 2
+        const val BYTES_PER_CHUNK = (SAMPLE_RATE * BYTES_PER_SAMPLE * CHUNK_DURATION_MS) / 1000
     }
 
     private val bufferSize: Int = maxOf(
         AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT),
-        (SAMPLE_RATE * 2 * CHUNK_DURATION_MS) / 1000  // bytes for CHUNK_DURATION_MS at 16-bit
+        BYTES_PER_CHUNK
     )
 
     /**

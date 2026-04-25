@@ -379,7 +379,6 @@ async def audio_end(payload: AudioSessionRequest):
         filename = "audio.webm"
 
     try:
-        mime_type = "audio/wav" if filename.endswith(".wav") else "audio/webm"
         logger.info(f"[audio/end] sending {len(audio_bytes)}B to Deepgram filename={filename}")
         options = PrerecordedOptions(
             model="nova-3",
