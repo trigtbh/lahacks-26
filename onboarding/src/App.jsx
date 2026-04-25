@@ -9,7 +9,7 @@ const APPS = [
   { id:"gmail",   group:"google", category:"Productivity", label:"Gmail",     desc:"Send & draft emails",          icon:"https://upload.wikimedia.org/wikipedia/commons/7/7e/Gmail_icon_%282020%29.svg",                                                             color:"#EA4335", auth:"google" },
   { id:"gcal",    group:"google", category:"Productivity", label:"Calendar",  desc:"Create, push & cancel events", icon:"https://upload.wikimedia.org/wikipedia/commons/a/a5/Google_Calendar_icon_%282020%29.svg",                                                   color:"#4285F4", auth:"google" },
   { id:"slack",   group:"slack",  category:"Communication",label:"Slack",     desc:"Message channels & DMs",       icon:"https://upload.wikimedia.org/wikipedia/commons/d/d5/Slack_icon_2019.svg",                                                                    color:"#E01E5A", auth:"slack"  },
-  { id:"notion",  group:"zapier", category:"Productivity", label:"Notion",    desc:"Create & append to pages",     icon:"https://upload.wikimedia.org/wikipedia/commons/4/45/Notion_app_logo.png",                                                                    color:"#ffffff", auth:"zapier" },
+  { id:"notion",  group:"notion", category:"Productivity", label:"Notion",    desc:"Create & append to pages",     icon:"https://upload.wikimedia.org/wikipedia/commons/4/45/Notion_app_logo.png",                                                                    color:"#000000", auth:"notion" },
   { id:"github",  group:"zapier", category:"Dev",          label:"GitHub",    desc:"Open & comment on issues",     icon:"https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",                                                                   color:"#f0f0f0", auth:"zapier" },
   { id:"spotify", group:"zapier", category:"Entertainment",label:"Spotify",   desc:"Play, pause & control music",  icon:"https://upload.wikimedia.org/wikipedia/commons/1/19/Spotify_logo_without_text.svg",                                                          color:"#1DB954", auth:"zapier" },
   { id:"uber",    group:"zapier", category:"Transport",    label:"Uber",      desc:"Request rides by voice",       icon:"https://upload.wikimedia.org/wikipedia/commons/c/cc/Uber_logo_2018.png",                                                                     color:"#ffffff", auth:"zapier" },
@@ -21,6 +21,7 @@ const CATEGORIES = ["All", ...new Set(APPS.map(a => a.category))];
 const AUTH_GROUPS = {
   google: { label:"Google", icon:"https://upload.wikimedia.org/wikipedia/commons/c/c1/Google_%22G%22_logo.svg", authUrl: uid => `${API_BASE}/auth/google?user_id=${uid}` },
   slack:  { label:"Slack",  icon:"https://upload.wikimedia.org/wikipedia/commons/d/d5/Slack_icon_2019.svg",    authUrl: uid => `${API_BASE}/auth/slack?user_id=${uid}`  },
+  notion: { label:"Notion", icon:"https://upload.wikimedia.org/wikipedia/commons/4/45/Notion_app_logo.png",   authUrl: uid => `${API_BASE}/auth/notion?user_id=${uid}` },
 };
 
 // ── Theme ─────────────────────────────────────────────────────────────────────

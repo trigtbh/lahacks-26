@@ -35,6 +35,8 @@ from ai.validator import validate
 
 SLACK_CLIENT_ID      = os.environ.get("SLACK_CLIENT_ID", "")
 SLACK_CLIENT_SECRET  = os.environ.get("SLACK_CLIENT_SECRET", "")
+NOTION_CLIENT_ID     = os.environ.get("NOTION_CLIENT_ID", "")
+NOTION_CLIENT_SECRET = os.environ.get("NOTION_CLIENT_SECRET", "")
 GOOGLE_CLIENT_ID     = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 BACKEND_URL          = os.environ.get("BACKEND_URL", "http://149.248.10.229:8000")
@@ -978,6 +980,42 @@ async def auth_slack_callback(code: str, state: str):
     })
     logger.info("[auth/slack] token saved user=%s", user_id)
     return HTMLResponse(_CONNECTED_HTML.format(service="Slack"))
+
+
+# ── Notion ────────────────────────────────────────────────────────────────────
+
+@app.get("/auth/notion")
+async def auth_notion(user_id: str):
+    params = {
+        "client_id":     NOTION_CLIENT_ID,
+        "response_type": "code",
+        "owner":         "user",
+        "redirect_uri":  f"{BACKEND_URL}/auth/notion/callback",
+        "state":         user_id,
+    }
+    return RedirectResponse("https://api.notion.com/v1/oauth/authorize?" + urlencode(params))
+
+
+@app.get("/auth/notion/callback")
+async def auth_notion_callback(code: str, state: str):
+    user_id = state
+    credentials = base64.b64encode(f"{NOTION_CLIENT_ID}:{NOTION_CLIENT_SECRET}".encode()).decode()
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://api.notion.com/v1/oauth/token",
+            headers={"Authorization": f"Basic {credentials}", "Content-Type": "application/json"},
+            json={"grant_type": "authorization_code", "code": code, "redirect_uri": f"{BACKEND_URL}/auth/notion/callback"},
+        )
+    data = resp.json()
+    if "access_token" not in data:
+        raise HTTPException(status_code=400, detail=data.get("error", "Notion OAuth failed"))
+
+    await token_store.save_token(user_id, "notion", {
+        "access_token": data["access_token"],
+        "workspace_id": data.get("workspace_id"),
+    })
+    logger.info("[auth/notion] token saved user=%s", user_id)
+    return HTMLResponse(_CONNECTED_HTML.format(service="Notion"))
 
 
 # ── Connection status ─────────────────────────────────────────────────────────
