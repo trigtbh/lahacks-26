@@ -576,9 +576,93 @@ _OAUTH_HANDLERS: dict[tuple[str, str], Any] = {
 _SLACK_ACTIONS = {"send_dm", "send_channel"}
 
 
+async def _ensure_app_connection(user_id: str, app: str) -> None:
+    if app in {"gmail", "google_calendar"}:
+        doc = await token_store.get_token(user_id, "google")
+        if not doc:
+            raise ValueError(f"Google account not connected for user '{user_id}'")
+    elif app == "slack":
+        doc = await token_store.get_token(user_id, "slack")
+        if not doc:
+            raise ValueError(f"Slack account not connected for user '{user_id}'")
+
+
 # ─────────────────────────────────────────────
 # Public API
 # ─────────────────────────────────────────────
+
+def _summarize_step_preview(app: str, action: str, resolved: dict[str, Any]) -> str:
+    if app == "google_calendar" and action == "push_event":
+        return f"Push the next calendar event by {resolved.get('by_minutes', '?')} minutes"
+    if app == "google_calendar" and action == "create_event":
+        return f"Create calendar event '{resolved.get('title', 'Untitled')}'"
+    if app == "google_calendar" and action == "cancel_event":
+        return "Cancel the next calendar event"
+    if app == "gmail" and action == "send_email":
+        to = resolved.get("to", "")
+        recipient_count = len(to) if isinstance(to, list) else (1 if to else 0)
+        return f"Send an email to {recipient_count} recipient{'s' if recipient_count != 1 else ''}"
+    if app == "gmail" and action == "draft_email":
+        return "Create an email draft"
+    if app == "slack" and action == "send_dm":
+        return f"Send a Slack DM to {resolved.get('to', 'someone')}"
+    if app == "slack" and action == "send_channel":
+        return f"Post in Slack channel {resolved.get('channel', '')}".strip()
+    return f"Run {app}.{action}"
+
+
+async def preview_workflow(user_id: str, steps: list[dict[str, Any]]) -> dict[str, Any]:
+    preview_steps: list[dict[str, Any]] = []
+    failed_steps: list[dict[str, Any]] = []
+
+    for step in steps:
+        app = step.get("app", "")
+        action = step.get("action", "")
+        label = f"{app}.{action}"
+        try:
+            await _ensure_app_connection(user_id, app)
+            resolved = await _resolve_params(user_id, step.get("params", {}))
+            preview_steps.append({
+                "step": label,
+                "params": resolved,
+                "summary": _summarize_step_preview(app, action, resolved),
+                "status": "ready",
+            })
+        except Exception as exc:
+            failed_steps.append({
+                "step": label,
+                "error": str(exc),
+                "status": "error",
+            })
+
+    status = "ready" if not failed_steps else ("blocked" if not preview_steps else "partial")
+    return {
+        "status": status,
+        "steps": preview_steps,
+        "step_errors": failed_steps,
+    }
+
+
+def workflow_failure_message(result: dict[str, Any]) -> str:
+    failed_steps = result.get("steps_failed", [])
+    if not failed_steps:
+        return "workflow executed"
+
+    failed_errors = [str(step.get("error", "")) for step in failed_steps]
+    if any("Google account not connected" in error or "No Google OAuth token" in error for error in failed_errors):
+        return "google account not connected"
+    if any("Slack account not connected" in error or "No Slack OAuth token" in error for error in failed_errors):
+        return "slack account not connected"
+
+    failed_labels = [str(step.get("step", "")) for step in failed_steps]
+    if any(label.startswith("gmail.") for label in failed_labels):
+        return "gmail action failed"
+    if any(label.startswith("google_calendar.") for label in failed_labels):
+        return "calendar action failed"
+    if any(label.startswith("slack.") for label in failed_labels):
+        return "slack action failed"
+    return "workflow failed"
+
 
 # ─────────────────────────────────────────────
 # Core recursive execution engine
@@ -771,4 +855,5 @@ async def execute_workflow(user_id: str, steps: list[dict[str, Any]]) -> dict[st
         "status":          status,
         "steps_completed": completed,
         "steps_failed":    failed,
+        "message":         workflow_failure_message({"steps_failed": failed}),
     }
