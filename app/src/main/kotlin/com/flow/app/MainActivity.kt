@@ -31,10 +31,6 @@ class MainActivity : ComponentActivity() {
                 FlowScreen(viewModel)
             }
         }
-    }
-
-    override fun onStart() {
-        super.onStart()
         permissionsLauncher.launch(
             arrayOf(
                 Manifest.permission.BLUETOOTH_CONNECT,
