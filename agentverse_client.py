@@ -78,11 +78,13 @@ def _resolve(user_id: str, text: str) -> None:
 
 # ── Gateway agent ─────────────────────────────────────────────────────────────
 
+_GATEWAY_HOST = os.environ.get("GATEWAY_HOST", "localhost")
+
 gateway = Agent(
     name="flux-gateway",
     seed=os.environ.get("GATEWAY_SEED", "flux-gateway-seed-lahacks-26"),
     port=8001,
-    endpoint=["http://localhost:8001/submit"],
+    endpoint=[f"http://{_GATEWAY_HOST}:8001/submit"],
     loop=asyncio.new_event_loop(),
 )
 
