@@ -73,6 +73,7 @@ def _resolve(user_id: str, text: str) -> None:
 gateway = Agent(
     name="flux-gateway",
     seed=os.environ.get("GATEWAY_SEED", "flux-gateway-seed-lahacks-26"),
+    port=8001,
     mailbox=True,
     loop=asyncio.new_event_loop(),
 )
