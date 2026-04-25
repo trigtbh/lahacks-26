@@ -158,6 +158,24 @@ async def send_to_agent(
         raise TimeoutError(f"No reply from {agent_address} within {timeout}s")
 
 
+# ── Known agents (fallback when Agentverse search doesn't find them) ──────────
+# Add your deployed agent addresses here after deploying to Agentverse.
+
+KNOWN_AGENTS: dict[str, tuple[str, str]] = {
+    # "spoken name": ("agent1q...", "Display Name")
+    # e.g. "caltrain": ("agent1q<your_address>", "Caltrain"),
+}
+
+
+def _match_known(name: str) -> Optional[tuple[str, str]]:
+    """Case-insensitive substring match against KNOWN_AGENTS keys."""
+    name_lower = name.lower()
+    for key, value in KNOWN_AGENTS.items():
+        if key in name_lower or name_lower in key:
+            return value
+    return None
+
+
 # ── Agent discovery ───────────────────────────────────────────────────────────
 
 async def search_agents(name: str, limit: int = 5) -> list[dict]:
@@ -184,8 +202,16 @@ async def search_agents(name: str, limit: int = 5) -> list[dict]:
 async def find_agent(name: str) -> Optional[tuple[str, str]]:
     """
     Find best matching agent by name.
-    Returns (agent_address, display_name) or None if not found.
+    Checks KNOWN_AGENTS first, then falls back to Agentverse search.
+    Returns (agent_address, display_name) or None.
     """
+    # 1. Check hardcoded registry (instant, no API call)
+    known = _match_known(name)
+    if known:
+        logger.info(f"[find_agent] {name!r} matched known agent: {known[1]}")
+        return known
+
+    # 2. Fall back to Agentverse search
     agents = await search_agents(name)
     if not agents:
         return None
