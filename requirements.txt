@@ -4,3 +4,4 @@ openai
 pydantic
 motor
 python-dotenv
+elevenlabs

@@ -1,19 +1,23 @@
+import io
 import os
 import json
+import struct
 import uuid
 import logging
 import motor.motor_asyncio
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from typing import List, Dict, Optional, Any
 from openai import AsyncOpenAI
+from elevenlabs.client import ElevenLabs
 
 # Setup environment variables or default values
 from dotenv import load_dotenv
 load_dotenv()
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "your_openrouter_api_key_here")
+ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "your_elevenlabs_api_key_here")
 MONGODB_URI = os.environ.get("MONGODB_URI", "mongodb://localhost:27017")
 
 # Configure OpenAI client for OpenRouter
@@ -21,6 +25,9 @@ client_llm = AsyncOpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=OPENROUTER_API_KEY,
 )
+
+# ElevenLabs client for STT
+client_elevenlabs = ElevenLabs(api_key=ELEVENLABS_API_KEY)
 
 # MongoDB setup
 client = motor.motor_asyncio.AsyncIOMotorClient(MONGODB_URI)
@@ -168,6 +175,89 @@ async def parse_intent(request: ParseRequest):
     except Exception as e:
         logger.error(f"Session {session_id} - Error parsing intent: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _build_wav(pcm_data: bytes, sample_rate: int, channels: int, bit_depth: int = 16) -> bytes:
+    """Wrap raw PCM bytes in a minimal WAV (RIFF) container."""
+    byte_rate = sample_rate * channels * (bit_depth // 8)
+    block_align = channels * (bit_depth // 8)
+    data_size = len(pcm_data)
+    header = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF",
+        36 + data_size,       # total chunk size
+        b"WAVE",
+        b"fmt ",
+        16,                   # PCM sub-chunk size
+        1,                    # audio format (PCM)
+        channels,
+        sample_rate,
+        byte_rate,
+        block_align,
+        bit_depth,
+        b"data",
+        data_size,
+    )
+    return header + pcm_data
+
+
+@app.post("/transcribe")
+async def transcribe_audio(request: Request):
+    """
+    Receive a complete audio transmission as raw application/octet-stream
+    (PCM s16le) and transcribe it using ElevenLabs Scribe.
+
+    Expected request headers:
+        X-Audio-Sample-Rate : int   (e.g. 16000)
+        X-Audio-Encoding    : str   (e.g. pcm_s16le)
+        X-Audio-Channels    : int   (e.g. 1)
+        X-User-Id           : str   (caller identity)
+    """
+    # --- Parse custom headers -----------------------------------------------
+    sample_rate = int(request.headers.get("X-Audio-Sample-Rate", 16000))
+    encoding    = request.headers.get("X-Audio-Encoding", "pcm_s16le").lower()
+    channels    = int(request.headers.get("X-Audio-Channels", 1))
+    user_id     = request.headers.get("X-User-Id", "unknown")
+
+    logger.info(
+        f"[transcribe] user={user_id} sample_rate={sample_rate} "
+        f"encoding={encoding} channels={channels}"
+    )
+
+    # --- Buffer the entire body (end of body = end of transmission) ----------
+    pcm_data = await request.body()
+    if not pcm_data:
+        raise HTTPException(status_code=400, detail="Empty audio body received.")
+
+    logger.info(f"[transcribe] user={user_id} received {len(pcm_data)} bytes of PCM audio")
+
+    # --- Build WAV container so ElevenLabs can parse the format --------------
+    # Only pcm_s16le is currently supported; extend as needed.
+    if encoding != "pcm_s16le":
+        raise HTTPException(
+            status_code=415,
+            detail=f"Unsupported encoding '{encoding}'. Only pcm_s16le is supported."
+        )
+
+    wav_bytes = _build_wav(pcm_data, sample_rate=sample_rate, channels=channels, bit_depth=16)
+
+    # --- Send to ElevenLabs STT ----------------------------------------------
+    try:
+        wav_file = io.BytesIO(wav_bytes)
+        wav_file.name = "audio.wav"  # SDK uses the name attribute to infer MIME type
+
+        result = client_elevenlabs.speech_to_text.convert(
+            file=wav_file,
+            model_id="scribe_v2",
+        )
+        transcript = result.text
+        logger.info(f"[transcribe] user={user_id} transcript: {transcript!r}")
+    except Exception as e:
+        logger.error(f"[transcribe] ElevenLabs error for user={user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=502, detail=f"ElevenLabs transcription failed: {e}")
+
+    return JSONResponse({"user_id": user_id, "transcript": transcript})
+
 
 if __name__ == "__main__":
     import uvicorn
