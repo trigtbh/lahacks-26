@@ -1,189 +1,197 @@
 """
-Agentverse AI Engine REST API client.
+Agentverse integration: agent discovery + uAgents gateway messaging.
 
-Community agents are reached via the AI Engine, which handles routing to any
-registered agent by name/description. No uAgents SDK or gateway needed.
+Discovery:  POST https://agentverse.ai/v1/search/agents
+Messaging:  local gateway uAgent communicates via uAgents protocol
 
-Flow per query:
-  1. create_session(user_id)       → session_id
-  2. send_message(session_id, msg) → (no return)
-  3. poll_response(session_id)     → response text
-  4. delete_session(session_id)    → cleanup on disconnect
+Cross-loop bridge pattern:
+  - gateway.run() spins its own asyncio loop in a daemon thread
+  - outgoing messages go through a stdlib queue.Queue (thread-safe)
+  - on_interval drains the queue and calls ctx.send() inside gateway's loop
+  - replies come back via on_message; delivered to FastAPI's loop via
+    _fastapi_loop.call_soon_threadsafe(future.set_result, text)
 """
 
 import asyncio
 import logging
 import os
+import queue
+import threading
+import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
+from uagents import Agent, Context, Model
 
 logger = logging.getLogger(__name__)
 
 AGENTVERSE_API_KEY = os.environ.get("AGENTVERSE_API_KEY", "")
-_AI_ENGINE = "https://agentverse.ai/v1beta1/engine/chat"
-_ALMANAC   = "https://agentverse.ai/v1/almanac/agents"
+_SEARCH_URL = "https://agentverse.ai/v1/search/agents"
 
 
-def _headers() -> dict[str, str]:
+def _auth_headers() -> dict[str, str]:
     return {
         "Authorization": f"Bearer {AGENTVERSE_API_KEY}",
         "Content-Type": "application/json",
     }
 
 
-# ── Session lifecycle ─────────────────────────────────────────────────────────
+# ── Message models ────────────────────────────────────────────────────────────
 
-async def create_session(user_id: str) -> str:
-    """Open an AI Engine chat session. Returns session_id."""
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(
-            f"{_AI_ENGINE}/sessions",
-            headers=_headers(),
-            json={"email": user_id},
+class UserQuery(Model):
+    """Used with our own agents (Caltrain etc.)."""
+    text: str
+    user_id: str
+
+class AgentReply(Model):
+    """Response from our own agents."""
+    text: str
+    user_id: str
+
+class TextContent(Model):
+    """Chat Protocol content block used by community agents."""
+    type: str
+    text: str
+
+class ChatMessage(Model):
+    """Chat Protocol wrapper used by ASI:One-compatible community agents."""
+    timestamp: str
+    msg_id: str
+    content: list[TextContent]
+
+
+# ── Cross-loop state ──────────────────────────────────────────────────────────
+
+_outgoing: queue.Queue = queue.Queue()          # (address, text, user_id) — thread-safe
+_pending: dict[str, asyncio.Future] = {}        # user_id → Future (lives in FastAPI's loop)
+_agent_to_user: dict[str, str] = {}             # agent_address → user_id (for ChatMessage replies)
+_fastapi_loop: Optional[asyncio.AbstractEventLoop] = None
+
+
+def _resolve(user_id: str, text: str) -> None:
+    """Thread-safely deliver a reply to the waiting Future in FastAPI's loop."""
+    future = _pending.pop(user_id, None)
+    if future and _fastapi_loop and not future.done():
+        _fastapi_loop.call_soon_threadsafe(future.set_result, text)
+
+
+# ── Gateway agent ─────────────────────────────────────────────────────────────
+
+gateway = Agent(
+    name="flux-gateway",
+    seed=os.environ.get("GATEWAY_SEED", "flux-gateway-seed-lahacks-26"),
+    port=8001,
+    endpoint=["http://localhost:8001/submit"],
+)
+
+
+@gateway.on_interval(period=0.1)
+async def _flush_outgoing(ctx: Context) -> None:
+    """Drain the outgoing queue and send via ctx.send(). Runs in gateway's loop."""
+    while True:
+        try:
+            address, text, user_id = _outgoing.get_nowait()
+        except queue.Empty:
+            break
+
+        # Send using Chat Protocol so community agents understand us
+        msg = ChatMessage(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            msg_id=str(uuid.uuid4()),
+            content=[TextContent(type="text", text=text)],
         )
-        resp.raise_for_status()
-        return resp.json()["session_id"]
+        _agent_to_user[address] = user_id
+        await ctx.send(address, msg)
+        logger.info(f"[gateway] sent ChatMessage to {address} user={user_id}")
 
 
-async def send_message(session_id: str, message: str) -> None:
-    """Submit a user message to an existing AI Engine session."""
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(
-            f"{_AI_ENGINE}/sessions/{session_id}/submit",
-            headers=_headers(),
-            json={
-                "session_id": session_id,
-                "payload": {
-                    "type": "user_message",
-                    "user_message": message,
-                },
-            },
-        )
-        resp.raise_for_status()
+@gateway.on_message(model=AgentReply)
+async def _on_agent_reply(ctx: Context, sender: str, msg: AgentReply) -> None:
+    """Reply from our own agents (UserQuery/AgentReply schema)."""
+    logger.info(f"[gateway] AgentReply from {sender}: {msg.text!r}")
+    _resolve(msg.user_id, msg.text)
 
 
-async def poll_response(
-    session_id: str,
-    timeout: float = 30.0,
-    poll_interval: float = 1.5,
-) -> Optional[str]:
+@gateway.on_message(model=ChatMessage)
+async def _on_chat_message(ctx: Context, sender: str, msg: ChatMessage) -> None:
+    """Reply from community Chat Protocol agents."""
+    text = next((c.text for c in msg.content if c.type == "text" and c.text), "")
+    user_id = _agent_to_user.pop(sender, None)
+    logger.info(f"[gateway] ChatMessage from {sender} user={user_id}: {text!r}")
+    if user_id:
+        _resolve(user_id, text)
+
+
+def start_gateway() -> None:
     """
-    Poll until the AI Engine returns an agent reply.
-    Returns the response text, or None on timeout.
+    Capture FastAPI's running event loop, then start the gateway in a daemon
+    thread. Must be called from inside an async context (e.g. FastAPI lifespan).
     """
-    loop = asyncio.get_event_loop()
-    deadline = loop.time() + timeout
-
-    async with httpx.AsyncClient(timeout=15) as client:
-        while loop.time() < deadline:
-            resp = await client.get(
-                f"{_AI_ENGINE}/sessions/{session_id}/responses",
-                headers=_headers(),
-            )
-            resp.raise_for_status()
-            data = resp.json()
-
-            # The API may return a list or {"agent_response": [...]}
-            messages: list = data if isinstance(data, list) else data.get("agent_response", [])
-
-            for msg in messages:
-                kind = msg.get("type") or msg.get("message_type", "")
-                text = (
-                    msg.get("agent_message")
-                    or msg.get("text")
-                    or msg.get("content")
-                    or ""
-                )
-                if kind in ("agent_message", "agent_response") and text:
-                    return text
-                # Some agents signal completion without a message text
-                if kind in ("stop", "end", "agent_confirmation"):
-                    return text or "(done)"
-
-            await asyncio.sleep(poll_interval)
-
-    return None
+    global _fastapi_loop
+    _fastapi_loop = asyncio.get_running_loop()
+    t = threading.Thread(target=gateway.run, daemon=True, name="uagents-gateway")
+    t.start()
+    logger.info(f"[gateway] started — address: {gateway.address}")
 
 
-async def delete_session(session_id: str) -> None:
-    """Delete an AI Engine session (best-effort, ignore errors)."""
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            await client.delete(
-                f"{_AI_ENGINE}/sessions/{session_id}",
-                headers=_headers(),
-            )
-    except Exception:
-        pass
-
-
-# ── High-level query helper ───────────────────────────────────────────────────
-
-async def query_agent(
+async def send_to_agent(
+    agent_address: str,
     message: str,
     user_id: str,
-    session_id: Optional[str] = None,
-    agent_context: Optional[str] = None,
-    timeout: float = 30.0,
-) -> tuple[str, str]:
+    timeout: float = 15.0,
+) -> str:
     """
-    Send a message to the AI Engine and return (response_text, session_id).
-
-    Pass the same session_id on follow-up messages to continue the conversation.
-    agent_context is prepended to the first message so the AI Engine knows which
-    agent/service the user wants (e.g. "Caltrain schedule: when is the next train?").
+    Enqueue a message for an agent and await the reply.
+    Safe to call from FastAPI's async context.
     """
-    if not AGENTVERSE_API_KEY:
-        return "AGENTVERSE_API_KEY is not set.", session_id or ""
+    loop = asyncio.get_running_loop()
+    future: asyncio.Future[str] = loop.create_future()
+    _pending[user_id] = future
+    _outgoing.put_nowait((agent_address, message, user_id))
 
-    new_session = session_id is None
-    if new_session:
-        session_id = await create_session(user_id)
-
-    # On a new session, prefix the message with the agent context so the AI
-    # Engine can route to the right registered agent.
-    payload = f"{agent_context}: {message}" if (new_session and agent_context) else message
-
-    await send_message(session_id, payload)
-    response = await poll_response(session_id, timeout=timeout)
-
-    if response is None:
-        response = "The agent didn't respond in time. Try again."
-
-    return response, session_id
+    try:
+        return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
+    except asyncio.TimeoutError:
+        _pending.pop(user_id, None)
+        _agent_to_user.pop(agent_address, None)
+        raise TimeoutError(f"No reply from {agent_address} within {timeout}s")
 
 
 # ── Agent discovery ───────────────────────────────────────────────────────────
 
-async def search_agent(name: str) -> list[dict]:
-    """Search Agentverse almanac for agents matching name."""
+async def search_agents(name: str, limit: int = 5) -> list[dict]:
+    """POST /v1/search/agents — semantic search by name."""
+    if not AGENTVERSE_API_KEY:
+        logger.warning("[search] AGENTVERSE_API_KEY not set")
+        return []
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(
-                _ALMANAC,
-                params={"search": name},
-                headers=_headers(),
+            resp = await client.post(
+                _SEARCH_URL,
+                headers=_auth_headers(),
+                json={"search_text": name, "sort": "relevancy", "limit": limit},
             )
             if not resp.is_success:
+                logger.warning(f"[search] {resp.status_code}: {resp.text[:200]}")
                 return []
-            data = resp.json()
-            return data.get("agents", data) if isinstance(data, dict) else data
+            return resp.json().get("agents", [])
     except Exception as e:
-        logger.error(f"[agentverse] almanac search error: {e}")
+        logger.error(f"[search] error for {name!r}: {e}")
         return []
 
 
-async def find_agent_name(query: str) -> str:
+async def find_agent(name: str) -> Optional[tuple[str, str]]:
     """
-    Resolve a user-spoken agent name to a canonical display name.
-    Falls back to the raw query string if the almanac search fails.
+    Find best matching agent by name.
+    Returns (agent_address, display_name) or None if not found.
     """
-    agents = await search_agent(query)
-    if agents:
-        return agents[0].get("name") or query
-    return query
-
-
-def start_gateway() -> None:
-    """No-op — gateway replaced by AI Engine REST API."""
+    agents = await search_agents(name)
+    if not agents:
+        return None
+    agent = agents[0]
+    address = agent.get("address") or agent.get("agent_address")
+    display_name = agent.get("name") or name
+    if not address:
+        return None
+    return address, display_name
