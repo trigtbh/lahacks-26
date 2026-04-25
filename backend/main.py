@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from elevenlabs.client import AsyncElevenLabs
-from deepgram import DeepgramClient, PrerecordedOptions, BufferSource
+from deepgram import DeepgramClient
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -281,21 +281,19 @@ async def audio_end(payload: AudioSessionRequest):
     try:
         mime_type = "audio/wav" if filename.endswith(".wav") else "audio/webm"
         logger.info(f"[audio/end] sending {len(audio_bytes)}B to Deepgram filename={filename}")
-        payload_dg: BufferSource = {"buffer": audio_bytes}
-        options = PrerecordedOptions(
-            model="nova-3",
-            language="en",
-            smart_format=True,
-            keywords=["Flux:2", "workflow:2"],
-            mimetype=mime_type,
-        )
-        response = await client_deepgram.listen.asyncrest.v("1").transcribe_file(
-            payload_dg,
+        options = {
+            "model": "nova-3",
+            "language": "en",
+            "smart_format": True,
+            "keywords": ["Flux:2", "workflow:2"],
+        }
+        response = await client_deepgram.listen.v1.asyncrest.transcribe_file(
+            {"buffer": audio_bytes, "mimetype": mime_type},
             options,
         )
         transcript = (
-            response.results.channels[0].alternatives[0].transcript
-            if response.results and response.results.channels
+            response["results"]["channels"][0]["alternatives"][0]["transcript"]
+            if response.get("results") and response["results"].get("channels")
             else ""
         )
         logger.info(f"[audio/end] transcript={transcript!r}")
