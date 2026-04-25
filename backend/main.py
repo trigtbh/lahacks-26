@@ -1,5 +1,4 @@
 from dotenv import load_dotenv
-load_dotenv()
 import difflib
 import os
 import re
@@ -8,6 +7,7 @@ import struct
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+load_dotenv(Path(__file__).parent / ".env")
 from urllib.parse import urlencode
 
 import httpx
