@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
 from typing import Any
@@ -62,6 +63,25 @@ async def _resolve_params(user_id: str, params: dict) -> dict:
 
             elif value in _CALENDAR_NEXT_EVENT_RESOLVERS:
                 value = await _resolve_calendar_next_event(user_id, value)
+
+            elif value == "google_maps.directions_to_next_event":
+                creds = await get_google_creds(user_id)
+                event = await _get_next_event(creds)
+                value = event.get("location", "") if event else ""
+
+            elif value.startswith("google_drive.file_by_name:"):
+                name = value[len("google_drive.file_by_name:"):]
+                value = await _drive_find_file_id(user_id, name)
+
+            elif value == "google_drive.latest_file":
+                creds = await get_google_creds(user_id)
+                svc = build("drive", "v3", credentials=creds)
+                res = svc.files().list(
+                    orderBy="modifiedTime desc", pageSize=1,
+                    fields="files(id, name)",
+                ).execute()
+                files = res.get("files", [])
+                value = files[0]["id"] if files else ""
 
         resolved[key] = value
     return resolved
@@ -255,16 +275,185 @@ async def _slack_send(user_id: str, params: dict, action: str) -> None:
 
 
 # ─────────────────────────────────────────────
+# Google Maps handlers
+# ─────────────────────────────────────────────
+
+async def _maps_get_directions(user_id: str, params: dict) -> dict:
+    api_key = os.environ.get("GOOGLE_MAPS_API_KEY", "")
+    if not api_key:
+        raise ValueError("GOOGLE_MAPS_API_KEY not configured")
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.get(
+            "https://maps.googleapis.com/maps/api/directions/json",
+            params={
+                "origin":      params.get("origin", "current location"),
+                "destination": params["destination"],
+                "mode":        params.get("mode", "driving"),
+                "key":         api_key,
+            },
+        )
+    data = resp.json()
+    if data.get("status") != "OK":
+        raise ValueError(f"Directions API: {data.get('status')} — {data.get('error_message', '')}")
+    leg = data["routes"][0]["legs"][0]
+    log.info("Maps directions %r → %r", params.get("origin"), params["destination"])
+    return {
+        "distance": leg["distance"]["text"],
+        "duration": leg["duration"]["text"],
+        "summary":  data["routes"][0].get("summary", ""),
+    }
+
+
+async def _maps_search_nearby(user_id: str, params: dict) -> list:
+    api_key = os.environ.get("GOOGLE_MAPS_API_KEY", "")
+    if not api_key:
+        raise ValueError("GOOGLE_MAPS_API_KEY not configured")
+    req: dict = {"query": params["query"], "key": api_key}
+    if params.get("location"):
+        req["location"] = params["location"]
+        req["radius"]   = str(params.get("radius", 1000))
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.get(
+            "https://maps.googleapis.com/maps/api/place/textsearch/json",
+            params=req,
+        )
+    data = resp.json()
+    if data.get("status") not in ("OK", "ZERO_RESULTS"):
+        raise ValueError(f"Places API: {data.get('status')} — {data.get('error_message', '')}")
+    results = data.get("results", [])[:5]
+    log.info("Maps nearby %r → %d results", params["query"], len(results))
+    return [
+        {"name": r["name"], "address": r.get("formatted_address", ""), "rating": r.get("rating")}
+        for r in results
+    ]
+
+
+# ─────────────────────────────────────────────
+# Google Drive handlers
+# ─────────────────────────────────────────────
+
+async def _drive_find_file_id(user_id: str, name: str) -> str:
+    creds = await get_google_creds(user_id)
+    svc = build("drive", "v3", credentials=creds)
+    res = svc.files().list(
+        q=f"name = '{name}' and trashed = false",
+        pageSize=1, fields="files(id, name)",
+    ).execute()
+    files = res.get("files", [])
+    return files[0]["id"] if files else ""
+
+
+async def _drive_create_document(user_id: str, params: dict) -> dict:
+    creds = await get_google_creds(user_id)
+    docs_svc = build("docs", "v1", credentials=creds)
+    doc = docs_svc.documents().create(body={"title": params["title"]}).execute()
+    doc_id = doc["documentId"]
+    content = params.get("content", "")
+    if content:
+        docs_svc.documents().batchUpdate(
+            documentId=doc_id,
+            body={"requests": [{"insertText": {"location": {"index": 1}, "text": content}}]},
+        ).execute()
+    log.info("Drive doc created: %s", doc_id)
+    return {"document_id": doc_id, "url": f"https://docs.google.com/document/d/{doc_id}"}
+
+
+async def _drive_search_files(user_id: str, params: dict) -> list:
+    creds = await get_google_creds(user_id)
+    svc = build("drive", "v3", credentials=creds)
+    max_results = int(params.get("max_results", 5))
+    query = params["query"].replace("'", "\\'")
+    res = svc.files().list(
+        q=f"name contains '{query}' and trashed = false",
+        pageSize=max_results,
+        fields="files(id, name, mimeType, modifiedTime, webViewLink)",
+    ).execute()
+    files = res.get("files", [])
+    log.info("Drive search %r → %d results", params["query"], len(files))
+    return files
+
+
+async def _drive_share_file(user_id: str, params: dict) -> None:
+    creds = await get_google_creds(user_id)
+    svc = build("drive", "v3", credentials=creds)
+    file_id = await _drive_find_file_id(user_id, params["file_name"])
+    if not file_id:
+        raise ValueError(f"No Drive file found named '{params['file_name']}'")
+    role = params.get("role", "reader")
+    svc.permissions().create(
+        fileId=file_id,
+        sendNotificationEmail=True,
+        body={"type": "user", "role": role, "emailAddress": params["email"]},
+    ).execute()
+    log.info("Drive '%s' shared with %s as %s", params["file_name"], params["email"], role)
+
+
+# ─────────────────────────────────────────────
+# Google Flights handler
+# ─────────────────────────────────────────────
+
+_CABIN_CLASS_MAP = {"economy": "1", "premium_economy": "2", "business": "3", "first": "4"}
+
+
+async def _flights_search_flights(user_id: str, params: dict) -> dict:
+    serpapi_key = os.environ.get("SERPAPI_KEY", "")
+    origin      = params["origin"]
+    destination = params["destination"]
+    if not serpapi_key:
+        raise ValueError("SERPAPI_KEY not configured")
+    req: dict = {
+        "engine":       "google_flights",
+        "departure_id": origin,
+        "arrival_id":   destination,
+        "api_key":      serpapi_key,
+    }
+    if params.get("departure_date"):
+        req["outbound_date"] = params["departure_date"]
+    if params.get("return_date"):
+        req["return_date"] = params["return_date"]
+    if params.get("num_adults"):
+        req["adults"] = str(params["num_adults"])
+    if params.get("cabin_class"):
+        req["travel_class"] = _CABIN_CLASS_MAP.get(params["cabin_class"], "1")
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get("https://serpapi.com/search", params=req)
+    data = resp.json()
+    if "error" in data:
+        raise ValueError(f"SerpAPI: {data['error']}")
+    best = (data.get("best_flights") or data.get("other_flights") or [])[:5]
+    log.info("Flights %s→%s → %d options", origin, destination, len(best))
+    return {
+        "origin":      origin,
+        "destination": destination,
+        "flights": [
+            {
+                "price":    f.get("price"),
+                "duration": f.get("total_duration"),
+                "stops":    len(f.get("layovers", [])),
+                "airline":  (f.get("flights") or [{}])[0].get("airline", ""),
+            }
+            for f in best
+        ],
+    }
+
+
+# ─────────────────────────────────────────────
 # Action router
 # ─────────────────────────────────────────────
 
 _OAUTH_HANDLERS: dict[tuple[str, str], Any] = {
-    ("gmail",            "send_email"):    _gmail_send_email,
-    ("gmail",            "draft_email"):   _gmail_draft_email,
-    ("gmail",            "search_email"):  _gmail_search_email,
-    ("google_calendar",  "create_event"):  _gcal_create_event,
-    ("google_calendar",  "push_event"):    _gcal_push_event,
-    ("google_calendar",  "cancel_event"):  _gcal_cancel_event,
+    ("gmail",            "send_email"):      _gmail_send_email,
+    ("gmail",            "draft_email"):     _gmail_draft_email,
+    ("gmail",            "search_email"):    _gmail_search_email,
+    ("google_calendar",  "create_event"):    _gcal_create_event,
+    ("google_calendar",  "push_event"):      _gcal_push_event,
+    ("google_calendar",  "cancel_event"):    _gcal_cancel_event,
+    ("google_maps",      "get_directions"):  _maps_get_directions,
+    ("google_maps",      "search_nearby"):   _maps_search_nearby,
+    ("google_drive",     "create_document"): _drive_create_document,
+    ("google_drive",     "search_files"):    _drive_search_files,
+    ("google_drive",     "share_file"):      _drive_share_file,
+    ("google_flights",   "search_flights"):  _flights_search_flights,
 }
 
 _SLACK_ACTIONS = {"send_dm", "send_channel"}

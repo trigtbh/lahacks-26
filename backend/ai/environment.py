@@ -141,7 +141,47 @@ ALLOWED_ACTIONS: dict[str, dict] = {
             "optional": [],
             "description": "Track the status of an existing order",
         },
-    }
+    },
+
+    "google_maps": {
+        "get_directions": {
+            "required": ["destination"],
+            "optional": ["origin", "mode"],
+            "description": "Get directions to a destination. origin defaults to current location. mode: driving, walking, transit, bicycling.",
+        },
+        "search_nearby": {
+            "required": ["query"],
+            "optional": ["location", "radius"],
+            "description": "Search for nearby places by type or keyword (e.g. 'coffee', 'gas station').",
+        },
+    },
+
+    "google_flights": {
+        "search_flights": {
+            "required": ["origin", "destination"],
+            "optional": ["departure_date", "return_date", "num_adults", "cabin_class"],
+            "description": "Search Google Flights for available flights. origin/destination are airport codes or city names. cabin_class: economy, premium_economy, business, first.",
+        },
+    },
+
+    "google_drive": {
+        "create_document": {
+            "required": ["title"],
+            "optional": ["content"],
+            "description": "Create a new Google Doc with a title and optional text content.",
+        },
+        "search_files": {
+            "required": ["query"],
+            "optional": ["max_results"],
+            "description": "Search Google Drive for files matching a name or keyword.",
+        },
+        "share_file": {
+            "required": ["file_name", "email"],
+            "optional": ["role"],
+            "description": "Share a Drive file with someone by email. role: reader (default), writer, commenter.",
+        },
+    },
+
 }
 
 
@@ -185,6 +225,13 @@ RESOLVERS: dict[str, str] = {
     "user.delivery_address": "User's default food delivery address",
 
     "uber.ride_link": "Generate Uber deep link for a ride",
+
+    # Google Maps
+    "google_maps.directions_to_next_event": "Directions from current location to the next calendar event's location",
+
+    # Google Drive
+    "google_drive.file_by_name:{name}": "Find a Google Drive file ID by name. Replace {name} with the file name.",
+    "google_drive.latest_file": "The most recently modified file in Google Drive",
 }
 
 
