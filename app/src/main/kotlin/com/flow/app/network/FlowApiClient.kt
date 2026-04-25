@@ -44,7 +44,7 @@ class FlowApiClient(baseUrl: String) {
 
     private val http = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(75, TimeUnit.SECONDS)
+        .readTimeout(25, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
