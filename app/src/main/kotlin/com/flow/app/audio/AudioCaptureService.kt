@@ -111,7 +111,7 @@ class AudioCaptureService : Service() {
                             }
                         }
                         "agentverse_search" -> {
-                            val name = resp.agentName
+                            val name = resp.agentName.lowercase()
                             FluxEvents.emitTrigger(resp.transcript)
                             FluxEvents.emitAgentSearchTriggered(name)
                             apiClient.executeWorkflow(

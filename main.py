@@ -124,6 +124,14 @@ _COMMAND_VARIANTS = {
 
 _AGENTVERSE_VARIANTS = ["agentverse", "agent verse", "agentaverse", "agentoverse"]
 
+# Agent addresses that bypass the agentverse search
+_HARDCODED_AGENTS: dict[str, tuple[str, str]] = {
+    "caltrain": (
+        "agent1qtuuyttz8ujuxceq0gllcerlksjneenrh2mfcm67st8qrm9lzzh3cd7f9h6",
+        "Caltrain",
+    ),
+}
+
 _FIND_AGENT_RE = re.compile(
     r"\b(?:find|search\s+for|search|look\s+up)\s+(?P<name>.+?)\s+(?:on|in|at)\s+\S+$",
     re.IGNORECASE,
@@ -331,11 +339,16 @@ async def workflow_execute(payload: WorkflowRequest):
     # 2. Connect intent — "talk to Caltrain"
     raw_name = _parse_connect_intent(text)
     if raw_name:
-        result = await find_agent(raw_name)
-        if not result:
-            return await _respond("connect_failed", [],
-                                  f"Sorry, I couldn't find an agent named '{raw_name}' on Agentverse.")
-        address, display_name = result
+        hardcoded = _HARDCODED_AGENTS.get(raw_name.lower())
+        if hardcoded:
+            address, display_name = hardcoded
+            logger.info(f"[workflow/execute] user={user_id} → hardcoded agent={display_name} addr={address}")
+        else:
+            result = await find_agent(raw_name)
+            if not result:
+                return await _respond("connect_failed", [],
+                                      f"Sorry, I couldn't find an agent named '{raw_name}' on Agentverse.")
+            address, display_name = result
         sessions.start_session(user_id, address, display_name)
         logger.info(f"[workflow/execute] user={user_id} → agent={display_name} addr={address}")
         return await _respond("connect", [f"Connected to {display_name}"],
