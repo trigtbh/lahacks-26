@@ -34,12 +34,12 @@ body {
 
 .noise {
   position: fixed; inset: 0;
-  pointer-events: none; z-index: 1;
-  opacity: 0.025;
+  pointer-events: none; z-index: 3;
+  opacity: 0.13;
   background-image:
-    url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   background-repeat: repeat;
-  background-size: 128px;
+  background-size: 180px;
 }
 
 /* ── Ambient orbs (non-welcome pages) ───────────────────────────────────────── */
@@ -54,7 +54,7 @@ body {
 }
 .bg-orb--3 { width: 700px; height: 700px; background: radial-gradient(circle, rgba(74,222,128,0.07), transparent); top: 50%; left: 50%; transform: translate(-50%,-50%); }
 
-/* ── Welcome page orbs (vivid) ──────────────────────────────────────────────── */
+/* ── Welcome page orbs (flat color, no gradients) ───────────────────────────── */
 
 .w-orb {
   position: absolute;
@@ -63,22 +63,25 @@ body {
   z-index: 0;
 }
 .w-orb--1 {
-  width: 560px; height: 560px;
-  top: -160px; left: -160px;
-  background: radial-gradient(circle at 40% 40%, rgba(139,92,246,0.55), transparent 65%);
-  filter: blur(60px);
+  width: 600px; height: 600px;
+  top: -220px; left: -200px;
+  background: #5500cc;
+  filter: blur(110px);
+  opacity: 0.28;
 }
 .w-orb--2 {
-  width: 480px; height: 480px;
-  bottom: -100px; right: -80px;
-  background: radial-gradient(circle at 60% 60%, rgba(249,115,22,0.5), transparent 65%);
-  filter: blur(60px);
+  width: 500px; height: 500px;
+  bottom: -150px; right: -120px;
+  background: #f73a00;
+  filter: blur(100px);
+  opacity: 0.3;
 }
 .w-orb--3 {
-  width: 360px; height: 360px;
-  top: 40%; left: 55%;
-  background: radial-gradient(circle, rgba(236,72,153,0.25), transparent 70%);
-  filter: blur(80px);
+  width: 300px; height: 300px;
+  top: 30%; left: 50%;
+  background: #cc0055;
+  filter: blur(90px);
+  opacity: 0.18;
 }
 
 /* ── Top bar ────────────────────────────────────────────────────────────────── */
@@ -175,26 +178,17 @@ body {
 }
 
 .welcome-brand {
-  font-size: 15px; font-weight: 700;
-  letter-spacing: 0.01em;
-  background: linear-gradient(90deg, #a78bfa, #f97316 60%, #ec4899);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  width: fit-content;
+  font-size: 64px; font-weight: 900;
+  letter-spacing: -3px; line-height: 1;
+  color: #f73a00;
 }
 
 .hero-title {
-  font-size: 60px; font-weight: 800;
-  letter-spacing: -2.5px; line-height: 1.0; color: #fff;
+  font-size: 44px; font-weight: 800;
+  letter-spacing: -2px; line-height: 1.05; color: #fff;
 }
 
-.hero-gradient {
-  background: linear-gradient(100deg, #f97316 0%, #ec4899 50%, #a78bfa 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
+.hero-accent { color: #f73a00; }
 
 .hero-sub {
   font-size: 16px; color: var(--muted);
@@ -209,14 +203,13 @@ body {
 
 .btn-welcome {
   display: flex; align-items: center; justify-content: center; gap: 8px;
-  background: linear-gradient(100deg, #f97316, #ec4899 60%, #a78bfa);
+  background: #f73a00;
   color: #fff; border: none; border-radius: 10px;
   font-size: 15px; font-weight: 700;
   padding: 14px 20px; cursor: pointer; width: 100%;
   transition: opacity 0.15s, transform 0.15s;
-  box-shadow: 0 4px 24px rgba(249,115,22,0.25);
 }
-.btn-welcome:hover:not(:disabled) { opacity: 0.88; transform: translateY(-1px); box-shadow: 0 8px 32px rgba(249,115,22,0.3); }
+.btn-welcome:hover:not(:disabled) { opacity: 0.85; transform: translateY(-1px); }
 .btn-welcome:active:not(:disabled) { transform: none; }
 .btn-welcome:disabled { opacity: 0.25; cursor: not-allowed; }
 .btn-welcome .arr { display: inline-block; transition: transform 0.15s; }

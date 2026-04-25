@@ -95,7 +95,7 @@ function WelcomeStep({ userId, setUserId, onNext, theme }) {
         <div className="welcome-brand">{theme.appName}</div>
         <h1 className="hero-title">
           Stop doing<br />
-          <span className="hero-gradient">things yourself.</span>
+          <span className="hero-accent">things yourself.</span>
         </h1>
         <p className="hero-sub">{theme.tagline}</p>
         <div className="welcome-form">
