@@ -5,15 +5,18 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioTrack
 import android.os.IBinder
+import android.util.Base64
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.flow.app.BuildConfig
 import com.flow.app.FluxEvents
 import com.flow.app.network.FlowApiClient
 import com.flow.app.network.WorkflowRequest
-import android.util.Log
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.first
 import kotlin.math.sqrt
 
 class AudioCaptureService : Service() {
@@ -122,7 +125,12 @@ class AudioCaptureService : Service() {
                     userId = userId,
                     context = mapOf("source" to "glasses_mic", "chunk_id" to chunkId),
                 )
-            )
+            ).onSuccess { response ->
+                val pcm = response.audioB64?.let { Base64.decode(it, Base64.DEFAULT) }
+                if (pcm != null && pcm.isNotEmpty()) {
+                    playback(pcm)
+                }
+            }
         }
     }
 
@@ -141,6 +149,38 @@ class AudioCaptureService : Service() {
             i += 2
         }
         return sqrt(sum / (pcm.size / 2))
+    }
+
+    private fun playback(pcm: ByteArray) {
+        if (pcm.isEmpty()) return
+        Thread {
+            val bufferSize = AudioTrack.getMinBufferSize(
+                AudioCaptureManager.SAMPLE_RATE,
+                AudioFormat.CHANNEL_OUT_MONO,
+                AudioCaptureManager.AUDIO_FORMAT,
+            )
+            val track = AudioTrack.Builder()
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                )
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setSampleRate(AudioCaptureManager.SAMPLE_RATE)
+                        .setEncoding(AudioCaptureManager.AUDIO_FORMAT)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                        .build()
+                )
+                .setBufferSizeInBytes(bufferSize)
+                .setTransferMode(AudioTrack.MODE_STREAM)
+                .build()
+            track.play()
+            track.write(pcm, 0, pcm.size)
+            track.stop()
+            track.release()
+        }.start()
     }
 
     override fun onDestroy() {

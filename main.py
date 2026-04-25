@@ -1,24 +1,70 @@
 import difflib
 import io
 import os
+import re
+import base64
 import struct
 import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from elevenlabs.client import AsyncElevenLabs
 from dotenv import load_dotenv
 
+from agentverse_client import find_agent_address, send_to_agent, start_gateway
+import session_store as sessions
+
 load_dotenv()
 
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
+ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")  # "George"
 
 client_elevenlabs = AsyncElevenLabs(api_key=ELEVENLABS_API_KEY)
+
+
+async def _tts_pcm(text: str) -> str | None:
+    """TTS text via ElevenLabs → base64-encoded PCM 16kHz mono. Returns None on failure."""
+    if not text or not ELEVENLABS_API_KEY:
+        return None
+    try:
+        chunks: list[bytes] = []
+        async for chunk in client_elevenlabs.text_to_speech.convert(
+            voice_id=ELEVENLABS_VOICE_ID,
+            text=text,
+            model_id="eleven_turbo_v2_5",
+            output_format="pcm_16000",
+        ):
+            chunks.append(chunk)
+        pcm = b"".join(chunks)
+        return base64.b64encode(pcm).decode()
+    except Exception as e:
+        logger.error(f"[tts] ElevenLabs TTS error: {e}")
+        return None
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-app = FastAPI()
+# ── Intent patterns ──────────────────────────────────────────────────────────
+
+_CONNECT_RE = re.compile(
+    r"\b(connect|talk|speak|open|switch|use|get|find|call)\b.{0,20}\b(?:to|with)?\b\s+(?:the\s+)?(?P<name>\w[\w\s]{0,30}?)\s*(?:agent)?$",
+    re.IGNORECASE,
+)
+_DISCONNECT_RE = re.compile(r"\b(disconnect|stop|exit|end|close|bye)\b", re.IGNORECASE)
+
+
+def _parse_connect_intent(text: str) -> str | None:
+    """Return agent name if the transcript is a connect request, else None."""
+    m = _CONNECT_RE.search(text.strip())
+    return m.group("name").strip() if m else None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    start_gateway()
+    yield
+
+app = FastAPI(lifespan=lifespan)
 
 # In-memory store: chunk_id -> {"chunks": [bytes, ...], "meta": {...}}
 recording_store: dict[str, dict] = {}
@@ -194,6 +240,90 @@ async def audio_end(payload: AudioSessionRequest):
         "transcript": transcript,
         "command": command,
     })
+
+
+# ---------------------------------------------------------------------------
+# /workflow/execute  — route transcript to active agent or built-in workflow
+# ---------------------------------------------------------------------------
+
+class WorkflowRequest(BaseModel):
+    trigger_phrase: str
+    user_id: str
+    context: dict = {}
+
+
+@app.post("/workflow/execute")
+async def workflow_execute(payload: WorkflowRequest):
+    text = payload.trigger_phrase.strip()
+    user_id = payload.user_id
+    logger.info(f"[workflow/execute] user={user_id} text={text!r}")
+
+    async def _respond(action: str, steps: list[str], reply: str, needs_input: bool = False) -> JSONResponse:
+        audio_b64 = await _tts_pcm(reply)
+        return JSONResponse({
+            "action_taken": action,
+            "steps_completed": steps,
+            "needs_input": needs_input,
+            "question": reply if needs_input else "",
+            "reply": reply,
+            "audio_b64": audio_b64,
+        })
+
+    # 1. Disconnect intent
+    if _DISCONNECT_RE.search(text):
+        session = sessions.get_session(user_id)
+        if session:
+            agent_name = session.agent_name
+            sessions.end_session(user_id)
+            return await _respond("disconnect", [f"Disconnected from {agent_name}"],
+                                  f"Disconnected from {agent_name}.")
+
+    # 2. Connect intent — "talk to Caltrain"
+    agent_name = _parse_connect_intent(text)
+    if agent_name:
+        result = await find_agent_address(agent_name)
+        if not result:
+            return await _respond("connect_failed", [],
+                                  f"Sorry, I couldn't find an agent named '{agent_name}' on Agentverse.")
+        address, display_name = result
+        sessions.start_session(user_id, address, display_name)
+        logger.info(f"[workflow/execute] connected user={user_id} to agent={display_name} addr={address}")
+        return await _respond("connect", [f"Connected to {display_name}"],
+                              f"Connected to {display_name}. Go ahead.")
+
+    # 3. Route to active agent session
+    session = sessions.get_session(user_id)
+    if session:
+        sessions.append_history(user_id, "user", text)
+        try:
+            reply = await send_to_agent(session.agent_address, text, user_id)
+        except TimeoutError:
+            reply = "The agent didn't respond in time. Try again."
+        sessions.append_history(user_id, "agent", reply)
+        return await _respond("agent_message", [f"Sent to {session.agent_name}"], reply)
+
+    # 4. No active session — fallback
+    return await _respond("no_agent", [],
+                          "Say 'connect to agent name' to start talking to an agent.")
+
+
+# ---------------------------------------------------------------------------
+# /agent/chat  — lightweight direct chat endpoint (bypasses audio pipeline)
+# ---------------------------------------------------------------------------
+
+class AgentChatRequest(BaseModel):
+    user_id: str
+    message: str
+
+
+@app.post("/agent/chat")
+async def agent_chat(payload: AgentChatRequest):
+    """Direct text → agent → text endpoint for testing or non-audio clients."""
+    fake_workflow = WorkflowRequest(
+        trigger_phrase=payload.message,
+        user_id=payload.user_id,
+    )
+    return await workflow_execute(fake_workflow)
 
 
 if __name__ == "__main__":

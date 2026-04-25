@@ -32,6 +32,8 @@ data class WorkflowResponse(
     val stepsCompleted: List<String>,
     val needsInput: Boolean,
     val question: String,
+    val reply: String,
+    val audioB64: String?,
 )
 
 class FlowApiClient(baseUrl: String) {
@@ -74,8 +76,7 @@ class FlowApiClient(baseUrl: String) {
 
     /**
      * POST /audio/end
-     * Signals the backend that the audio chunk session is complete.
-     * Must be called after the last chunk for this chunkId.
+     * Finalises the session and returns the ElevenLabs transcript.
      */
     suspend fun endAudio(chunkId: String, userId: String): Result<EndAudioResponse> =
         withContext(Dispatchers.IO) {
@@ -161,6 +162,8 @@ class FlowApiClient(baseUrl: String) {
                     stepsCompleted = steps,
                     needsInput = res.getBoolean("needs_input"),
                     question = res.optString("question", ""),
+                    reply = res.optString("reply", ""),
+                    audioB64 = res.optString("audio_b64", null).takeIf { !it.isNullOrEmpty() },
                 )
             }
         }
