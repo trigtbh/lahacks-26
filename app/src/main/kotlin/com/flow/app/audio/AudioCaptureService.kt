@@ -15,6 +15,7 @@ import androidx.core.app.NotificationCompat
 import com.flow.app.BuildConfig
 import com.flow.app.FluxEvents
 import com.flow.app.network.FlowApiClient
+import com.flow.app.network.WorkflowRequest
 import kotlinx.coroutines.*
 import kotlin.math.sqrt
 
@@ -91,11 +92,24 @@ class AudioCaptureService : Service() {
         if (hadSpeech) {
             withContext(NonCancellable) {
                 apiClient.endAudio(chunkId, userId).onSuccess { resp ->
-                    Log.d("Flux/End", "transcript=${resp.transcript}")
+                    Log.d("Flux/End", "transcript=${resp.transcript} command=${resp.command}")
                     if (containsFlux(resp.transcript)) {
                         FluxEvents.emitTrigger(resp.transcript)
                         if (containsWorkflow(resp.transcript)) {
                             FluxEvents.emitWorkflowTriggered(resp.command)
+                        }
+                    }
+                    val phrase = resp.command.ifBlank { resp.transcript }
+                    if (phrase.isNotBlank()) {
+                        apiClient.executeWorkflow(
+                            WorkflowRequest(
+                                triggerPhrase = phrase,
+                                userId = userId,
+                                context = mapOf("chunk_id" to chunkId),
+                            )
+                        ).onSuccess { wf ->
+                            val pcm = wf.audioB64?.let { Base64.decode(it, Base64.DEFAULT) }
+                            if (pcm != null && pcm.isNotEmpty()) playback(pcm)
                         }
                     }
                 }
