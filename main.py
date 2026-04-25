@@ -6,14 +6,14 @@ import logging
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
-from elevenlabs.client import ElevenLabs
+from elevenlabs.client import AsyncElevenLabs
 from dotenv import load_dotenv
 
 load_dotenv()
 
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
 
-client_elevenlabs = ElevenLabs(api_key=ELEVENLABS_API_KEY)
+client_elevenlabs = AsyncElevenLabs(api_key=ELEVENLABS_API_KEY)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -161,16 +161,20 @@ async def audio_end(payload: AudioSessionRequest):
     else:
         audio_bytes = audio_data
         filename = "audio.webm"
+    print(filename)
 
     try:
         audio_file = io.BytesIO(audio_bytes)
         audio_file.name = filename
 
-        result = client_elevenlabs.speech_to_text.convert(
+        logger.info(f"[audio/end] chunk_id={chunk_id} about to send {len(audio_bytes)} bytes to ElevenLabs via SDK. filename={filename}")
+
+        result = await client_elevenlabs.speech_to_text.convert(
             file=audio_file,
             model_id="scribe_v2",
         )
         transcript = result.text
+        logger.info(f"[audio/end] chunk_id={chunk_id} successfully received response from ElevenLabs. transcript_length={len(transcript)}")
         logger.info(f"[audio/end] chunk_id={chunk_id} transcript={transcript!r}")
     except Exception as e:
         logger.error(f"[audio/end] ElevenLabs error chunk_id={chunk_id}: {e}", exc_info=True)
