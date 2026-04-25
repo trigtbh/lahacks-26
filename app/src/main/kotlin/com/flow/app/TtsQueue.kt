@@ -35,14 +35,14 @@ object TtsQueue {
                 t.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                     override fun onStart(utteranceId: String?) {}
                     override fun onDone(utteranceId: String?) {
-                        if (utteranceId == id && !cont.isCompleted) cont.resume(Unit)
+                        if (utteranceId == id && !cont.isCompleted) cont.resumeWith(Result.success(Unit))
                     }
                     override fun onError(utteranceId: String?) {
-                        if (utteranceId == id && !cont.isCompleted) cont.resume(Unit)
+                        if (utteranceId == id && !cont.isCompleted) cont.resumeWith(Result.success(Unit))
                     }
                 })
                 if (t.speak(text, TextToSpeech.QUEUE_FLUSH, null, id) == TextToSpeech.ERROR) {
-                    if (!cont.isCompleted) cont.resume(Unit)
+                    if (!cont.isCompleted) cont.resumeWith(Result.success(Unit))
                 }
             }
         }
