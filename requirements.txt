@@ -1,9 +1,0 @@
-fastapi
-uvicorn
-openai
-pydantic
-motor
-python-dotenv
-elevenlabs
-uagents
-httpx

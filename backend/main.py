@@ -17,6 +17,11 @@ load_dotenv()
 from agentverse_client import find_agent, send_to_agent, start_gateway
 import session_store as sessions
 
+# ── Workflow pipeline ─────────────────────────────────────────────────────────
+import asyncio
+import workflow_store
+from executor import execute_workflow
+
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
 ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")  # "George"
 
@@ -377,6 +382,116 @@ async def agent_chat(payload: AgentChatRequest):
         user_id=payload.user_id,
     )
     return await workflow_execute(fake_workflow)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# WORKFLOW ENDPOINTS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class WorkflowCreateRequest(BaseModel):
+    user_id:        str
+    trigger_phrase: str
+    steps:          list[dict]   # [{app, action, params}, ...]
+
+
+class WorkflowTriggerRequest(BaseModel):
+    user_id:        str
+    trigger_phrase: str
+
+
+# ---------------------------------------------------------------------------
+# POST /workflow/create
+# Save a trigger + step list to MongoDB.
+# ---------------------------------------------------------------------------
+@app.post("/workflow/create")
+async def workflow_create(payload: WorkflowCreateRequest):
+    """
+    Store a workflow in MongoDB.
+
+    Example body:
+    {
+      "user_id": "user123",
+      "trigger_phrase": "I'm running late",
+      "steps": [
+        {"app": "gmail", "action": "send_email",
+         "params": {"to": "calendar.next_event.attendees",
+                    "subject": "Running late",
+                    "body": "I'm running about 15 min late — pushing the meeting too."}},
+        {"app": "google_calendar", "action": "push_event",
+         "params": {"event_ref": "calendar.next_event", "by_minutes": 15}}
+      ]
+    }
+    """
+    workflow_id = await workflow_store.save_workflow(
+        user_id=payload.user_id,
+        trigger_phrase=payload.trigger_phrase,
+        steps=payload.steps,
+    )
+    logger.info("[workflow/create] saved id=%s trigger=%r user=%s",
+                workflow_id, payload.trigger_phrase, payload.user_id)
+    return {"workflow_id": workflow_id, "status": "saved"}
+
+
+# ---------------------------------------------------------------------------
+# GET /workflow/list/{user_id}
+# ---------------------------------------------------------------------------
+@app.get("/workflow/list/{user_id}")
+async def workflow_list(user_id: str):
+    """Return all saved workflows for a user."""
+    workflows = await workflow_store.list_workflows(user_id)
+    return {"workflows": workflows}
+
+
+# ---------------------------------------------------------------------------
+# POST /workflow/trigger
+# Match a spoken phrase to a saved workflow and execute it.
+# ---------------------------------------------------------------------------
+@app.post("/workflow/trigger")
+async def workflow_trigger(payload: WorkflowTriggerRequest):
+    """
+    Fire a workflow by trigger phrase.
+    Looks up the best matching workflow in MongoDB for this user,
+    then executes the Gmail + Google Calendar steps.
+    """
+    doc = await workflow_store.find_by_trigger(payload.user_id, payload.trigger_phrase)
+    if not doc:
+        logger.info("[workflow/trigger] no match for %r user=%s",
+                    payload.trigger_phrase, payload.user_id)
+        return {
+            "status":  "no_match",
+            "message": f"No workflow found matching '{payload.trigger_phrase}'",
+        }
+
+    logger.info("[workflow/trigger] matched trigger=%r id=%s user=%s",
+                doc["trigger_phrase"], doc["_id"], payload.user_id)
+
+    # execute_workflow is synchronous (Google API calls) — run off the event loop
+    result = await asyncio.to_thread(execute_workflow, doc["steps"])
+
+    audio_b64 = None
+    if result["status"] == "success":
+        summary = f"Done. Emailed your attendees and pushed the meeting back."
+        if result.get("event_title"):
+            summary = f"Done. Emailed attendees of '{result['event_title']}' and pushed it back 15 minutes."
+        audio_b64 = await _tts_pcm(summary)
+
+    return {
+        "status":          result["status"],
+        "trigger_matched": doc["trigger_phrase"],
+        "steps_completed": result["steps_completed"],
+        "steps_failed":    result["steps_failed"],
+        "event_title":     result.get("event_title"),
+        "audio_b64":       audio_b64,
+    }
+
+
+# ---------------------------------------------------------------------------
+# DELETE /workflow/{workflow_id}
+# ---------------------------------------------------------------------------
+@app.delete("/workflow/{workflow_id}")
+async def workflow_delete(workflow_id: str):
+    deleted = await workflow_store.delete_workflow(workflow_id)
+    return {"deleted": deleted}
 
 
 if __name__ == "__main__":
