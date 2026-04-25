@@ -7,6 +7,7 @@ import android.speech.tts.TextToSpeech
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.flow.app.BuildConfig
 import com.flow.app.FluxEvents
 import com.flow.app.TtsQueue
 import com.flow.app.audio.AudioCaptureService
@@ -27,7 +28,7 @@ data class FlowUiState(
 
 class FlowViewModel(app: Application) : AndroidViewModel(app) {
 
-    private val userId = "akshai"
+    private val userId = BuildConfig.FLOW_USER_ID.ifBlank { "akshai" }
 
     private val _uiState = MutableStateFlow(FlowUiState())
     val uiState: StateFlow<FlowUiState> = _uiState.asStateFlow()
@@ -78,7 +79,6 @@ class FlowViewModel(app: Application) : AndroidViewModel(app) {
                     statusMessage = "Building workflow...",
                     workflowCommand = command,
                 )
-                TtsQueue.speak("Workflow will be created")
             }
         }
         viewModelScope.launch {

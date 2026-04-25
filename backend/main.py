@@ -1,6 +1,8 @@
 from dotenv import load_dotenv
 load_dotenv()
 import difflib
+import ipaddress
+import json
 import os
 import re
 import base64
@@ -8,7 +10,7 @@ import struct
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -38,6 +40,29 @@ GOOGLE_CLIENT_ID     = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 BACKEND_URL          = os.environ.get("BACKEND_URL", "http://149.248.10.229:8000")
 GOOGLE_REDIRECT_URI  = os.environ.get("GOOGLE_REDIRECT_URI", f"{BACKEND_URL}/auth/google/callback")
+
+
+def _load_google_client_config() -> tuple[str, dict]:
+    credentials_path = Path(__file__).with_name("credentials.json")
+    if not credentials_path.exists():
+        return "", {}
+    try:
+        payload = json.loads(credentials_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logging.getLogger(__name__).warning("[auth/google] failed reading credentials.json: %s", exc)
+        return "", {}
+    for client_type in ("installed", "web"):
+        config = payload.get(client_type)
+        if isinstance(config, dict):
+            return client_type, config
+    return "", {}
+
+
+_GOOGLE_CLIENT_TYPE, _GOOGLE_CLIENT_CONFIG = _load_google_client_config()
+if not GOOGLE_CLIENT_ID:
+    GOOGLE_CLIENT_ID = str(_GOOGLE_CLIENT_CONFIG.get("client_id") or "")
+if not GOOGLE_CLIENT_SECRET:
+    GOOGLE_CLIENT_SECRET = str(_GOOGLE_CLIENT_CONFIG.get("client_secret") or "")
 
 _GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/gmail.send",
@@ -78,6 +103,45 @@ async def _tts_pcm(text: str) -> str | None:
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+
+def _is_private_non_loopback_host(hostname: str) -> bool:
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+    return address.is_private and not address.is_loopback
+
+
+def _get_google_redirect_uri(request: Request | None = None) -> str:
+    configured_redirect = GOOGLE_REDIRECT_URI.strip()
+    parsed_configured = urlparse(configured_redirect) if configured_redirect else None
+
+    if request is not None:
+        request_host = request.url.hostname or ""
+        request_port = request.url.port or 8000
+        if _GOOGLE_CLIENT_TYPE == "installed" and _is_private_non_loopback_host(request_host):
+            localhost_redirect = f"http://localhost:{request_port}/auth/google/callback"
+            logger.info(
+                "[auth/google] using localhost redirect for installed client instead of private host=%s",
+                request_host,
+            )
+            return localhost_redirect
+
+    if parsed_configured and _GOOGLE_CLIENT_TYPE == "installed":
+        configured_host = parsed_configured.hostname or ""
+        if _is_private_non_loopback_host(configured_host):
+            localhost_redirect = f"http://localhost:{parsed_configured.port or 8000}/auth/google/callback"
+            logger.info(
+                "[auth/google] overriding private redirect host=%s with localhost for installed client",
+                configured_host,
+            )
+            return localhost_redirect
+
+    if configured_redirect:
+        return configured_redirect
+
+    return f"{BACKEND_URL}/auth/google/callback"
 
 # ── Intent patterns ──────────────────────────────────────────────────────────
 
@@ -149,8 +213,13 @@ def _build_wav(pcm_data: bytes, sample_rate: int, channels: int, bit_depth: int 
     return header + pcm_data
 
 
-_FLUX_VARIANTS      = ["flux", "flock", "flex", "flocks", "flax", "fluke", "blacks"]
+_FLUX_VARIANTS      = ["flux", "flock", "flex", "flocks", "flax", "fluke", "blacks", "folks"]
 _WORKFLOW_VARIANTS  = ["workflow", "workload", "work-flow", "work"]
+_COMMON_FLUX_MISHEARS = {"folks", "fox", "folksy", "flucks"}
+_WAKE_PREFIX_RE = re.compile(
+    r"^\s*(?:hey|hi|okay|ok)\b[\s,]+(?P<wake>[a-zA-Z']+)\b(?:[\s,!.?]+(?P<rest>.*))?$",
+    re.IGNORECASE,
+)
 
 _COMMAND_VARIANTS = {
     "workflow": [
@@ -231,6 +300,11 @@ def _extract_after_flux(transcript: str) -> str:
     for i, word in enumerate(words):
         if _word_fuzzy_matches(word, _FLUX_VARIANTS):
             return " ".join(words[i + 1:]).lstrip(" .,").strip()
+    wake_prefix_match = _WAKE_PREFIX_RE.match(transcript)
+    if wake_prefix_match:
+        wake_word = wake_prefix_match.group("wake").lower()
+        if wake_word in _COMMON_FLUX_MISHEARS:
+            return (wake_prefix_match.group("rest") or "").lstrip(" .,").strip()
     return ""
 
 def _contains_workflow(transcript: str) -> bool:
@@ -396,8 +470,28 @@ async def audio_end(payload: AudioSessionRequest):
         logger.error(f"[audio/end] Deepgram error: {e}", exc_info=True)
         raise HTTPException(status_code=502, detail=f"Deepgram transcription failed: {e}")
 
+    if not transcript.strip():
+        logger.info(f"[audio/end] ignoring empty transcript for chunk_id={chunk_id}")
+        return JSONResponse({
+            "chunk_id": chunk_id,
+            "user_id": meta["user_id"],
+            "transcript": "",
+            "command": "",
+            "action": "ignored",
+            "agent_name": "",
+            "workflow_status": "ignored",
+            "workflow_message": "empty transcript ignored",
+        })
+
     command = _extract_after_flux(transcript)
-    action, agent_name = _classify_command(command)
+
+    # Keep the old action/agent classification code around for reference, but
+    # route the audio flow through workflows only for now.
+    #
+    # action, agent_name = _classify_command(command)
+    # logger.info(f"[audio/end] command={command!r} action={action} agent_name={agent_name!r}")
+    action = "workflow"
+    agent_name = ""
     logger.info(f"[audio/end] command={command!r} action={action} agent_name={agent_name!r}")
 
     workflow_response = None
@@ -408,7 +502,11 @@ async def audio_end(payload: AudioSessionRequest):
             workflow_response = await _execute_saved_workflow(existing_workflow, meta["user_id"])
             action = "workflow"
             agent_name = ""
-        elif action == "workflow" or _contains_workflow(workflow_spoken_text):
+        else:
+            # Old behavior only created a workflow when the transcript looked
+            # like an explicit "workflow" command:
+            #
+            # elif action == "workflow" or _contains_workflow(workflow_spoken_text):
             workflow_response = await _create_workflow_from_transcript(meta["user_id"], workflow_spoken_text)
             action = "workflow"
             agent_name = ""
@@ -765,10 +863,11 @@ _CONNECTED_HTML = """<!doctype html><html><head><meta charset="utf-8">
 # ── Google ────────────────────────────────────────────────────────────────────
 
 @app.get("/auth/google")
-async def auth_google(user_id: str):
+async def auth_google(user_id: str, request: Request):
+    redirect_uri = _get_google_redirect_uri(request)
     params = {
         "client_id":     GOOGLE_CLIENT_ID,
-        "redirect_uri":  GOOGLE_REDIRECT_URI,
+        "redirect_uri":  redirect_uri,
         "response_type": "code",
         "scope":         " ".join(_GOOGLE_SCOPES),
         "access_type":   "offline",
@@ -778,9 +877,10 @@ async def auth_google(user_id: str):
     return RedirectResponse("https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params))
 
 
-async def _handle_google_callback(code: str, state: str):
+async def _handle_google_callback(code: str, state: str, request: Request):
     """Shared logic for both Google callback paths."""
-    user_id = state
+    user_id = state.strip()
+    redirect_uri = _get_google_redirect_uri(request)
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             "https://oauth2.googleapis.com/token",
@@ -788,7 +888,7 @@ async def _handle_google_callback(code: str, state: str):
                 "code":          code,
                 "client_id":     GOOGLE_CLIENT_ID,
                 "client_secret": GOOGLE_CLIENT_SECRET,
-                "redirect_uri":  GOOGLE_REDIRECT_URI,
+                "redirect_uri":  redirect_uri,
                 "grant_type":    "authorization_code",
             },
         )
@@ -796,24 +896,50 @@ async def _handle_google_callback(code: str, state: str):
     if "error" in data:
         raise HTTPException(status_code=400, detail=data["error"])
 
-    await token_store.save_token(user_id, "google", {
+    token_payload = {
         "access_token":  data["access_token"],
         "refresh_token": data.get("refresh_token"),
         "token_uri":     "https://oauth2.googleapis.com/token",
         "scopes":        _GOOGLE_SCOPES,
-    })
-    logger.info("[auth/google] token saved user=%s", user_id)
-    return HTMLResponse(_CONNECTED_HTML.format(service="Google"))
+    }
+
+    google_email = ""
+    try:
+        async with httpx.AsyncClient() as client:
+            userinfo_resp = await client.get(
+                "https://openidconnect.googleapis.com/v1/userinfo",
+                headers={"Authorization": f"Bearer {data['access_token']}"},
+            )
+        userinfo_resp.raise_for_status()
+        google_email = str(userinfo_resp.json().get("email") or "").strip().lower()
+    except Exception as exc:
+        logger.warning("[auth/google] could not fetch userinfo for state=%s: %s", user_id, exc)
+
+    token_user_ids = {user_id}
+    if google_email:
+        token_user_ids.add(google_email)
+
+    for token_user_id in token_user_ids:
+        await token_store.save_token(token_user_id, "google", token_payload)
+
+    logger.info(
+        "[auth/google] token saved state_user=%s google_email=%s aliases=%s",
+        user_id,
+        google_email or "(unknown)",
+        sorted(token_user_ids),
+    )
+    connected_label = f"Google ({google_email})" if google_email else "Google"
+    return HTMLResponse(_CONNECTED_HTML.format(service=connected_label))
 
 
 @app.get("/auth/google/callback")
-async def auth_google_callback(code: str, state: str):
-    return await _handle_google_callback(code, state)
+async def auth_google_callback(code: str, state: str, request: Request):
+    return await _handle_google_callback(code, state, request)
 
 
 @app.get("/connect/google/redirect")
-async def connect_google_redirect(code: str, state: str):
-    return await _handle_google_callback(code, state)
+async def connect_google_redirect(code: str, state: str, request: Request):
+    return await _handle_google_callback(code, state, request)
 
 
 # ── Slack ─────────────────────────────────────────────────────────────────────
