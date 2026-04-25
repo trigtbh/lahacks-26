@@ -11,12 +11,14 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from ai.environment import ALLOWED_ACTIONS, is_resolver
+from ai.environment import ALLOWED_ACTIONS, INNATE_ACTIONS, CONTROL_ACTIONS, is_resolver
 from ai.llm import generate_json
 from ai.prompts import VALIDATOR_SYSTEM, build_validator_repair_prompt
 
 
-_VALID_INTENTS = {"create_workflow", "trigger_workflow", "other"}
+_VALID_INTENTS = {"create_workflow", "trigger_workflow", "other", "denied"}
+
+_OUTPUT_KEY_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
 
 # Heuristic: does this string LOOK like it was meant to be a resolver?
 # Matches dotted lowercase identifiers, optionally with `:` or `+` template suffix.
@@ -48,6 +50,8 @@ def validate(workflow: dict, allowed_actions: dict | None = None) -> list[str]:
     extended schema).
     """
     _allowed = allowed_actions if allowed_actions is not None else ALLOWED_ACTIONS
+    # Always include innate and control in the effective allowed set.
+    _effective = {**_allowed, "innate": INNATE_ACTIONS, "control": CONTROL_ACTIONS}
     errors: list[str] = []
 
     if not isinstance(workflow, dict):
@@ -56,7 +60,10 @@ def validate(workflow: dict, allowed_actions: dict | None = None) -> list[str]:
     _check_top_level(workflow, errors)
     _check_intent(workflow, errors)
     _check_confidence(workflow, errors)
-    _check_steps(workflow, errors, _allowed)
+
+    # Skip step validation entirely for denied workflows.
+    if workflow.get("intent") != "denied":
+        _check_steps(workflow, errors, _effective)
 
     return errors
 
@@ -106,8 +113,13 @@ def _check_confidence(workflow: dict, errors: list[str]) -> None:
         errors.append(f"top-level: confidence {conf} is out of range [0.0, 1.0]")
 
 
-def _check_steps(workflow: dict, errors: list[str], allowed_actions: dict) -> None:
-    steps = workflow.get("steps")
+def _check_steps(workflow_or_steps, errors: list[str], allowed_actions: dict) -> None:
+    # Accept either a workflow dict (top-level call) or a raw steps list (recursive call).
+    if isinstance(workflow_or_steps, dict):
+        steps = workflow_or_steps.get("steps")
+    else:
+        steps = workflow_or_steps
+
     if not isinstance(steps, list):
         return  # already reported
 
@@ -148,6 +160,20 @@ def _check_steps(workflow: dict, errors: list[str], allowed_actions: dict) -> No
             )
             continue
 
+        # output_key validation
+        output_key = step.get("output_key")
+        if output_key is not None:
+            if not isinstance(output_key, str) or not _OUTPUT_KEY_RE.match(output_key):
+                errors.append(
+                    f"{prefix}: 'output_key' must be a lowercase identifier "
+                    f"(got {output_key!r})"
+                )
+
+        # Control flow steps have a different required-field structure.
+        if app == "control":
+            _check_control_step(step, action, prefix, errors, allowed_actions)
+            continue
+
         # params
         params = step.get("params")
         if not isinstance(params, dict):
@@ -165,7 +191,10 @@ def _check_steps(workflow: dict, errors: list[str], allowed_actions: dict) -> No
                 errors.append(f"{prefix}: required param '{req}' is None")
 
         # Resolver-shape values must actually be valid resolvers.
+        # context.* references are explicitly excluded — they resolve at runtime.
         for pname, pvalue in params.items():
+            if isinstance(pvalue, str) and pvalue.startswith("context."):
+                continue  # valid context reference — checked at runtime
             if isinstance(pvalue, str) and _looks_like_resolver(pvalue):
                 if not is_resolver(pvalue):
                     errors.append(
@@ -176,6 +205,46 @@ def _check_steps(workflow: dict, errors: list[str], allowed_actions: dict) -> No
 
 def _looks_like_resolver(value: str) -> bool:
     return bool(_RESOLVER_SHAPE_RE.match(value))
+
+
+def _check_control_step(
+    step: dict,
+    action: str,
+    prefix: str,
+    errors: list[str],
+    allowed_actions: dict,
+) -> None:
+    if action == "if":
+        if not isinstance(step.get("condition"), str):
+            errors.append(f"{prefix}: control.if requires a string 'condition'")
+        if not isinstance(step.get("then"), list):
+            errors.append(f"{prefix}: control.if requires a list 'then'")
+        else:
+            _check_steps(step["then"], errors, allowed_actions)
+        else_branch = step.get("else")
+        if else_branch is not None:
+            if not isinstance(else_branch, list):
+                errors.append(f"{prefix}: control.if 'else' must be a list")
+            else:
+                _check_steps(else_branch, errors, allowed_actions)
+
+    elif action == "while":
+        if not isinstance(step.get("condition"), str):
+            errors.append(f"{prefix}: control.while requires a string 'condition'")
+        if not isinstance(step.get("steps"), list):
+            errors.append(f"{prefix}: control.while requires a list 'steps'")
+        else:
+            _check_steps(step["steps"], errors, allowed_actions)
+
+    elif action == "for_each":
+        if not isinstance(step.get("items"), str):
+            errors.append(f"{prefix}: control.for_each requires a string 'items'")
+        if not isinstance(step.get("loop_variable"), str):
+            errors.append(f"{prefix}: control.for_each requires a string 'loop_variable'")
+        if not isinstance(step.get("steps"), list):
+            errors.append(f"{prefix}: control.for_each requires a list 'steps'")
+        else:
+            _check_steps(step["steps"], errors, allowed_actions)
 
 
 # ─────────────────────────────────────────────

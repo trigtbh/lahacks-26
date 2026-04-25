@@ -5,6 +5,7 @@ All allowed apps, actions, params, and resolvers live here.
 Gemini is ONLY allowed to use what's defined in this file.
 """
 
+from __future__ import annotations
 from typing import Any
 
 # ─────────────────────────────────────────────
@@ -186,6 +187,120 @@ ALLOWED_ACTIONS: dict[str, dict] = {
 
 
 # ─────────────────────────────────────────────
+# INNATE ACTIONS
+# Run locally — no OAuth, no external API required.
+# ─────────────────────────────────────────────
+
+INNATE_ACTIONS: dict[str, dict] = {
+    "get_datetime": {
+        "required": [],
+        "optional": ["format", "timezone"],
+        "description": "Get current date/time. format: iso (default), human, date_only, time_only.",
+    },
+    "get_user_info": {
+        "required": [],
+        "optional": ["field"],
+        "description": "Get user profile data. field: user_id, email, name. Omit for full profile dict.",
+    },
+    "set_variable": {
+        "required": ["key", "value"],
+        "optional": [],
+        "description": "Store a value in workflow context under the given key for later steps.",
+    },
+    "get_variable": {
+        "required": ["key"],
+        "optional": ["default"],
+        "description": "Read a value from workflow context. Returns default if key is missing.",
+    },
+    "calculate": {
+        "required": ["expression"],
+        "optional": [],
+        "description": "Evaluate a safe numeric expression. Use {{context.key}} to reference context values.",
+    },
+    "format_text": {
+        "required": ["template"],
+        "optional": [],
+        "description": "Render a template string. Use {{context.key}} to interpolate context values.",
+    },
+    "join_list": {
+        "required": ["items"],
+        "optional": ["separator", "final_separator"],
+        "description": "Join a context list into a human-readable string. items is a context ref.",
+    },
+    "count": {
+        "required": ["items"],
+        "optional": [],
+        "description": "Return the integer length of a context list. items is a context ref.",
+    },
+    "filter_list": {
+        "required": ["items", "condition"],
+        "optional": [],
+        "description": "Filter a context list to items matching a condition expression. items is a context ref.",
+    },
+    "extract_field": {
+        "required": ["items", "field"],
+        "optional": [],
+        "description": "Map over a context list of dicts and return just the named field from each. items is a context ref.",
+    },
+    "slice_list": {
+        "required": ["items"],
+        "optional": ["start", "end", "limit"],
+        "description": "Return a sub-list from a context list. items is a context ref.",
+    },
+    "merge_text": {
+        "required": ["parts"],
+        "optional": ["separator"],
+        "description": "Concatenate multiple strings. parts is a list of context refs or string literals.",
+    },
+    "wait": {
+        "required": ["seconds"],
+        "optional": [],
+        "description": "Pause execution for N seconds (capped at 60).",
+    },
+    "http_request": {
+        "required": ["url", "method"],
+        "optional": ["headers", "body"],
+        "description": "Make a generic HTTP request. method: GET, POST, PUT, PATCH, DELETE.",
+    },
+    "log": {
+        "required": ["message"],
+        "optional": ["level"],
+        "description": "Write a message to server logs. level: info (default), warning, error.",
+    },
+}
+
+
+# ─────────────────────────────────────────────
+# CONTROL FLOW ACTIONS
+# Structural steps that direct execution — no external calls.
+# ─────────────────────────────────────────────
+
+CONTROL_ACTIONS: dict[str, dict] = {
+    "if": {
+        "required": ["condition", "then"],
+        "optional": ["else"],
+        "description": (
+            "Conditional branch. condition is an expression over context values. "
+            "then and else are lists of steps."
+        ),
+    },
+    "while": {
+        "required": ["condition", "steps"],
+        "optional": ["max_iterations"],
+        "description": "Loop while condition is truthy. max_iterations defaults to 20 (hard cap 100).",
+    },
+    "for_each": {
+        "required": ["items", "loop_variable", "steps"],
+        "optional": [],
+        "description": (
+            "Iterate over a context list. items is a context ref (e.g. context.results). "
+            "loop_variable names the per-iteration binding. steps run once per item."
+        ),
+    },
+}
+
+
+# ─────────────────────────────────────────────
 # RESOLVERS
 # Dynamic values evaluated at workflow execution time.
 # Gemini should reference these keys instead of hardcoding values.
@@ -261,9 +376,24 @@ STEP_SCHEMA = {
 # Injected into every Gemini call. Single source of truth.
 # ─────────────────────────────────────────────
 
-def build_system_prompt() -> str:
+def build_system_prompt(allowed_apps: set[str] | None = None) -> str:
+    """
+    Build the Gemma system prompt.
+
+    allowed_apps: when provided, only include those app names from ALLOWED_ACTIONS.
+    INNATE_ACTIONS and CONTROL_ACTIONS are always included.
+    When None, all apps are included (backward-compat / tests).
+    """
+    # Merge all action dicts; filter ALLOWED_ACTIONS by allowed_apps if given.
+    if allowed_apps is None:
+        filtered = dict(ALLOWED_ACTIONS)
+    else:
+        filtered = {k: v for k, v in ALLOWED_ACTIONS.items() if k in allowed_apps}
+
+    all_actions = {**filtered, "innate": INNATE_ACTIONS, "control": CONTROL_ACTIONS}
+
     apps_block = ""
-    for app, actions in ALLOWED_ACTIONS.items():
+    for app, actions in all_actions.items():
         apps_block += f"\n  {app}:\n"
         for action, meta in actions.items():
             apps_block += f"    - {action}: required={meta['required']}, optional={meta['optional']}\n"
@@ -271,6 +401,15 @@ def build_system_prompt() -> str:
     resolvers_block = "\n".join(
         f"  {key}: {desc}" for key, desc in RESOLVERS.items()
     )
+
+    denial_rule = ""
+    if allowed_apps is not None:
+        denial_rule = (
+            '\n7. If the user\'s request CANNOT be satisfied by any of the available apps above, '
+            'return:\n'
+            '   {"intent": "denied", "denial_reason": "<one sentence why>", '
+            '"trigger_phrase": "", "steps": [], "missing_params": [], "confidence": 0.0}'
+        )
 
     return f"""You are a workflow parser for a voice-activated automation app.
 
@@ -280,7 +419,7 @@ RULES:
 3. If a step requires an app not in the list, set "unsupported": true on that step and still include it.
 4. Return ONLY valid JSON. No markdown, no explanation, no code fences.
 5. If you cannot resolve a param, add it to missing_params as a plain English description.
-6. Confidence should reflect how well you understood the user's intent (0.0-1.0).
+6. Confidence should reflect how well you understood the user's intent (0.0-1.0).{denial_rule}
 
 ALLOWED APPS AND ACTIONS:
 {apps_block}
@@ -288,18 +427,36 @@ ALLOWED APPS AND ACTIONS:
 RESOLVERS (use these keys for dynamic values):
 {resolvers_block}
 
+DATA FLOW:
+  Any step may include "output_key": "<identifier>" to store its result in the workflow context.
+  Reference stored values in later steps using "context.<identifier>" or "context.<identifier>.<field>".
+  Example: {{"app": "gmail", "action": "search_email", "params": {{}}, "output_key": "emails"}}
+           {{"app": "innate", "action": "count", "params": {{"items": "context.emails"}}, "output_key": "email_count"}}
+
+CONTROL FLOW SYNTAX:
+  control.if:
+    {{"app": "control", "action": "if", "condition": "context.count > 0", "then": [...steps...], "else": [...steps...]}}
+  control.while:
+    {{"app": "control", "action": "while", "condition": "context.retries < 3", "steps": [...steps...], "max_iterations": 20}}
+  control.for_each:
+    {{"app": "control", "action": "for_each", "items": "context.email_list", "loop_variable": "item", "steps": [...steps...]}}
+  Conditions may reference context keys: context.count > 0 | context.status == "ok" | context.found is not None
+
 OUTPUT SCHEMA:
 {{
-  "intent": "create_workflow" | "trigger_workflow" | "other",
+  "intent": "create_workflow" | "trigger_workflow" | "other" | "denied",
+  "denial_reason": "<only present when intent is denied>",
   "trigger_phrase": "<phrase that activates this workflow>",
   "steps": [
     {{
       "app": "<app name>",
       "action": "<action name>",
-      "params": {{
-        "<param_name>": "<static value or resolver key>"
-      }},
-      "unsupported": false
+      "params": {{"<param_name>": "<static value, resolver key, or context.ref>"}},
+      "unsupported": false,
+      "output_key": "<optional: store result in context under this name>",
+      // control.if only: "condition", "then", "else"
+      // control.while only: "condition", "steps", "max_iterations"
+      // control.for_each only: "items", "loop_variable", "steps"
     }}
   ],
   "missing_params": ["<plain english description of what's missing>"],

@@ -20,6 +20,8 @@ import token_store
 import zapier_store
 import google_people
 from google_auth import get_google_creds
+from innate_executor import execute_innate
+from ai.condition_eval import evaluate_condition
 
 log = logging.getLogger(__name__)
 
@@ -45,10 +47,33 @@ def _resolve_static(value: Any) -> Any:
     return value
 
 
-async def _resolve_params(user_id: str, params: dict) -> dict:
-    """Resolve all params for a step, including API-backed contact/calendar resolvers."""
+def _resolve_context_path(path: str, context: dict) -> Any:
+    """Walk a dotted path into the context dict. Returns None if any segment is missing."""
+    node: Any = context
+    for part in path.split("."):
+        if isinstance(node, dict):
+            node = node.get(part)
+        elif isinstance(node, (list, tuple)):
+            try:
+                node = node[int(part)]
+            except (ValueError, IndexError):
+                return None
+        else:
+            return None
+    return node
+
+
+async def _resolve_params(user_id: str, params: dict, context: dict | None = None) -> dict:
+    """Resolve all params for a step, including context refs and API-backed resolvers."""
+    if context is None:
+        context = {}
     resolved = {}
     for key, value in params.items():
+        # Context references take priority.
+        if isinstance(value, str) and value.startswith("context."):
+            resolved[key] = _resolve_context_path(value[len("context."):], context)
+            continue
+
         value = _resolve_static(value)
 
         if isinstance(value, str):
@@ -463,82 +488,178 @@ _SLACK_ACTIONS = {"send_dm", "send_channel"}
 # Public API
 # ─────────────────────────────────────────────
 
+# ─────────────────────────────────────────────
+# Core recursive execution engine
+# ─────────────────────────────────────────────
+
+async def _dispatch_step(
+    user_id: str,
+    app: str,
+    action: str,
+    resolved: dict,
+    fallback_client: httpx.AsyncClient,
+) -> Any:
+    """Dispatch a single resolved step to the right handler. Returns the step result."""
+    handler = _OAUTH_HANDLERS.get((app, action))
+    if handler:
+        return await handler(user_id, resolved)
+
+    if app == "slack" and action in _SLACK_ACTIONS:
+        return await _slack_send(user_id, resolved, action)
+
+    webhook_url = await zapier_store.get_webhook_url(user_id, app, action)
+    if not webhook_url:
+        raise ValueError(f"No handler or Zapier webhook configured for {app}.{action}")
+    resp = await fallback_client.post(webhook_url, json=resolved)
+    resp.raise_for_status()
+    log.info("Zapier webhook fired for %s.%s → HTTP %s", app, action, resp.status_code)
+    return None
+
+
+async def _execute_steps(
+    user_id: str,
+    steps: list[dict[str, Any]],
+    context: dict,
+    fallback_client: httpx.AsyncClient,
+    completed: list,
+    failed: list,
+    event_sink: list | None = None,
+) -> None:
+    """
+    Recursively execute a list of steps, mutating context/completed/failed in place.
+    event_sink: if provided, SSE-ready dicts are appended here for the stream path.
+    """
+    for i, step in enumerate(steps):
+        app    = step.get("app", "")
+        action = step.get("action", "")
+        label  = f"{app}.{action}"
+
+        if event_sink is not None:
+            event_sink.append({"type": "step_start", "label": label})
+
+        try:
+            # ── Control flow ──────────────────────────────────────────────
+            if app == "control":
+                await _execute_control(
+                    user_id, action, step, context,
+                    fallback_client, completed, failed, event_sink,
+                )
+                continue
+
+            # ── Resolve params (with context support) ─────────────────────
+            resolved = await _resolve_params(user_id, step.get("params", {}), context)
+
+            # ── Innate actions ────────────────────────────────────────────
+            if app == "innate":
+                result = await execute_innate(user_id, action, resolved, context)
+            else:
+                result = await _dispatch_step(user_id, app, action, resolved, fallback_client)
+
+            # Store output in context if output_key is set.
+            output_key = step.get("output_key")
+            if output_key and result is not None:
+                context[output_key] = result
+
+            completed.append({"step": label, "params": resolved})
+            if event_sink is not None:
+                event_sink.append({"type": "step_done", "label": label, "params": resolved})
+
+        except Exception as exc:
+            log.error("%s failed: %s", label, exc, exc_info=True)
+            failed.append({"step": label, "error": str(exc)})
+            if event_sink is not None:
+                event_sink.append({"type": "step_error", "label": label, "error": str(exc)})
+
+
+async def _execute_control(
+    user_id: str,
+    action: str,
+    step: dict,
+    context: dict,
+    fallback_client: httpx.AsyncClient,
+    completed: list,
+    failed: list,
+    event_sink: list | None,
+) -> None:
+    if action == "if":
+        cond = bool(evaluate_condition(step.get("condition", ""), context))
+        branch = step.get("then", []) if cond else step.get("else", [])
+        await _execute_steps(user_id, branch, context, fallback_client, completed, failed, event_sink)
+
+    elif action == "while":
+        max_iter = min(int(step.get("max_iterations", 20)), 100)
+        for _ in range(max_iter):
+            if not evaluate_condition(step.get("condition", ""), context):
+                break
+            await _execute_steps(
+                user_id, step.get("steps", []), context,
+                fallback_client, completed, failed, event_sink,
+            )
+
+    elif action == "for_each":
+        items_ref = step.get("items", "")
+        if isinstance(items_ref, str) and items_ref.startswith("context."):
+            items = _resolve_context_path(items_ref[len("context."):], context)
+        else:
+            items = items_ref
+        if not isinstance(items, (list, tuple)):
+            raise ValueError(f"control.for_each: 'items' did not resolve to a list (got {type(items).__name__})")
+        items = list(items)[:50]  # hard cap to prevent runaway API calls
+        loop_var = step.get("loop_variable", "_item")
+        for item in items:
+            context[loop_var] = item
+            await _execute_steps(
+                user_id, step.get("steps", []), context,
+                fallback_client, completed, failed, event_sink,
+            )
+        context.pop(loop_var, None)
+
+    else:
+        raise ValueError(f"control: unknown action '{action}'")
+
+
+# ─────────────────────────────────────────────
+# Public API
+# ─────────────────────────────────────────────
+
 async def execute_workflow_stream(user_id: str, steps: list[dict[str, Any]]):
-    """Async generator that yields SSE-ready dicts for each step as it runs."""
+    """Async generator yielding SSE-ready dicts as each step executes."""
+    import json as _json
+    context: dict = {}
+    completed: list = []
+    failed: list = []
+    event_sink: list = []
+
     async with httpx.AsyncClient(timeout=_TIMEOUT) as fallback_client:
-        for i, step in enumerate(steps):
-            app    = step.get("app", "")
-            action = step.get("action", "")
-            label  = f"{app}.{action}"
-            resolved: dict = {}
+        await _execute_steps(
+            user_id, steps, context, fallback_client, completed, failed, event_sink,
+        )
 
-            yield {"type": "step_start", "index": i, "label": label}
+    # Yield all collected events (event_sink is populated synchronously during execution)
+    idx = 0
+    for event in event_sink:
+        if event["type"] == "step_start":
+            yield {"type": "step_start", "index": idx, "label": event["label"]}
+        elif event["type"] == "step_done":
+            yield {"type": "step_done", "index": idx, "params": event.get("params", {})}
+            idx += 1
+        elif event["type"] == "step_error":
+            yield {"type": "step_error", "index": idx, "error": event["error"]}
+            idx += 1
 
-            try:
-                resolved = await _resolve_params(user_id, step.get("params", {}))
-
-                handler = _OAUTH_HANDLERS.get((app, action))
-                if handler:
-                    await handler(user_id, resolved)
-                elif app == "slack" and action in _SLACK_ACTIONS:
-                    await _slack_send(user_id, resolved, action)
-                else:
-                    webhook_url = await zapier_store.get_webhook_url(user_id, app, action)
-                    if not webhook_url:
-                        raise ValueError(f"No handler or Zapier webhook configured for {label}")
-                    resp = await fallback_client.post(webhook_url, json=resolved)
-                    resp.raise_for_status()
-                    log.info("Zapier webhook fired for %s → HTTP %s", label, resp.status_code)
-
-                yield {"type": "step_done", "index": i, "params": resolved}
-
-            except Exception as exc:
-                log.error("%s failed: %s", label, exc, exc_info=True)
-                yield {"type": "step_error", "index": i, "error": str(exc)}
-
-    yield {"type": "done"}
+    status = "success" if not failed else ("failed" if not completed else "partial")
+    yield {"type": "done", "status": status}
 
 
 async def execute_workflow(user_id: str, steps: list[dict[str, Any]]) -> dict[str, Any]:
+    context: dict = {}
     completed: list[dict] = []
     failed:    list[dict] = []
 
     async with httpx.AsyncClient(timeout=_TIMEOUT) as fallback_client:
-        for step in steps:
-            app    = step.get("app", "")
-            action = step.get("action", "")
-            label  = f"{app}.{action}"
-            resolved: dict = {}
-
-            try:
-                resolved = await _resolve_params(user_id, step.get("params", {}))
-
-                # OAuth path — Google
-                handler = _OAUTH_HANDLERS.get((app, action))
-                if handler:
-                    await handler(user_id, resolved)
-                    completed.append({"step": label, "params": resolved})
-                    continue
-
-                # OAuth path — Slack
-                if app == "slack" and action in _SLACK_ACTIONS:
-                    await _slack_send(user_id, resolved, action)
-                    completed.append({"step": label, "params": resolved})
-                    continue
-
-                # Fallback — Zapier webhook
-                webhook_url = await zapier_store.get_webhook_url(user_id, app, action)
-                if not webhook_url:
-                    raise ValueError(f"No handler or Zapier webhook configured for {label}")
-
-                resp = await fallback_client.post(webhook_url, json=resolved)
-                resp.raise_for_status()
-                completed.append({"step": label, "params": resolved})
-                log.info("Zapier webhook fired for %s → HTTP %s", label, resp.status_code)
-
-            except Exception as exc:
-                log.error("%s failed: %s", label, exc, exc_info=True)
-                failed.append({"step": label, "error": str(exc)})
+        await _execute_steps(
+            user_id, steps, context, fallback_client, completed, failed,
+        )
 
     status = "success" if not failed else ("failed" if not completed else "partial")
     return {
