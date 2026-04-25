@@ -20,6 +20,9 @@ data class FlowUiState(
     val statusMessage: String = "Waiting for permissions...",
     val triggerMessage: String = "",
     val workflowCommand: String = "",
+    val lastTranscript: String = "",
+    val debugMessage: String = "",
+    val errorMessage: String = "",
 )
 
 class FlowViewModel(app: Application) : AndroidViewModel(app) {
@@ -37,6 +40,27 @@ class FlowViewModel(app: Application) : AndroidViewModel(app) {
                 _uiState.value = _uiState.value.copy(
                     statusMessage = "Go ahead...",
                     triggerMessage = "Flux heard: \"$transcript\""
+                )
+            }
+        }
+        viewModelScope.launch {
+            FluxEvents.speechCaptured.collect { transcript ->
+                _uiState.value = _uiState.value.copy(
+                    lastTranscript = transcript,
+                    errorMessage = "",
+                )
+            }
+        }
+        viewModelScope.launch {
+            FluxEvents.debugStatus.collect { message ->
+                _uiState.value = _uiState.value.copy(debugMessage = message)
+            }
+        }
+        viewModelScope.launch {
+            FluxEvents.errorMessage.collect { message ->
+                _uiState.value = _uiState.value.copy(
+                    errorMessage = message,
+                    statusMessage = "Capture error",
                 )
             }
         }

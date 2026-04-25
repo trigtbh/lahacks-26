@@ -342,24 +342,25 @@ async def audio_end(payload: AudioSessionRequest):
         filename = "audio.webm"
 
     try:
-        mime_type = "audio/wav" if filename.endswith(".wav") else "audio/webm"
         logger.info(f"[audio/end] sending {len(audio_bytes)}B to Deepgram filename={filename}")
-        options = {
-            "model": "nova-3",
-            "language": "en",
-            "smart_format": True,
-            "keywords": ["Flux:2", "workflow:2"],
-        }
         response = await asyncio.to_thread(
-            client_deepgram.listen.v1.rest.transcribe_file,
-            {"buffer": audio_bytes, "mimetype": mime_type},
-            options,
+            client_deepgram.listen.v1.media.transcribe_file,
+            request=audio_bytes,
+            model="nova-3",
+            language="en",
+            smart_format=True,
+            keywords=["Flux:2", "workflow:2"],
         )
-        transcript = (
-            response["results"]["channels"][0]["alternatives"][0]["transcript"]
-            if response.get("results") and response["results"].get("channels")
-            else ""
-        )
+        if isinstance(response, dict):
+            transcript = (
+                response["results"]["channels"][0]["alternatives"][0]["transcript"]
+                if response.get("results") and response["results"].get("channels")
+                else ""
+            )
+        else:
+            channels = getattr(getattr(response, "results", None), "channels", []) or []
+            alternatives = getattr(channels[0], "alternatives", []) if channels else []
+            transcript = getattr(alternatives[0], "transcript", "") if alternatives else ""
         logger.info(f"[audio/end] transcript={transcript!r}")
     except Exception as e:
         logger.error(f"[audio/end] Deepgram error: {e}", exc_info=True)

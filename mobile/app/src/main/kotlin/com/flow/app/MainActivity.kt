@@ -57,6 +57,69 @@ fun FlowScreen(viewModel: FlowViewModel) {
             Spacer(modifier = Modifier.height(16.dp))
             Text(text = state.statusMessage, style = MaterialTheme.typography.bodyLarge)
 
+            if (state.debugMessage.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(20.dp))
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Debug",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = state.debugMessage,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            }
+
+            if (state.lastTranscript.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(20.dp))
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Last Transcript",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = state.lastTranscript,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            }
+
+            if (state.errorMessage.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(20.dp))
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Error",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = state.errorMessage,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            }
+
             if (state.workflowCommand.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(24.dp))
                 Card(
