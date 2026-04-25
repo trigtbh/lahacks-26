@@ -19,22 +19,30 @@ class WakeWordDetector(private val context: Context) {
     private var isListening = false
     private var triggered = false  // prevent double-firing per utterance
     private val scope = CoroutineScope(Dispatchers.Main)
+    private val audioRouteManager = AudioRouteManager(context)
 
     fun start() {
+        if (isListening) return
         if (!SpeechRecognizer.isRecognitionAvailable(context)) {
             Log.w("WakeWord", "Speech recognition not available")
+            FluxEvents.emitError("Wake word recognition is not available on this device")
             return
         }
         isListening = true
         triggered = false
+        FluxEvents.emitDebugStatus(audioRouteManager.routeToPreferredInput().message)
+        FluxEvents.emitDebugStatus("Wake word detector listening for Flux")
         listen()
     }
 
     fun stop() {
+        if (!isListening && recognizer == null) return
         isListening = false
         recognizer?.stopListening()
         recognizer?.destroy()
         recognizer = null
+        audioRouteManager.clearRoute()
+        FluxEvents.emitDebugStatus("Wake word detector stopped")
     }
 
     private fun onFluxDetected(text: String) {
@@ -42,8 +50,9 @@ class WakeWordDetector(private val context: Context) {
         triggered = true
         Log.d("WakeWord", "Flux detected: $text")
         // Stop mic immediately so AudioRecord can take over
+        isListening = false
         recognizer?.stopListening()
-        FluxEvents.emitTrigger(text)
+        FluxEvents.emitWakeWordDetected(text)
     }
 
     private fun listen() {
@@ -57,13 +66,17 @@ class WakeWordDetector(private val context: Context) {
 
                 override fun onResults(results: Bundle) {
                     val matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    matches?.firstOrNull { it.contains("flux", ignoreCase = true) }
-                        ?.let { onFluxDetected(it) }
-                    restart()
+                    val fluxMatch = matches?.firstOrNull { it.contains("flux", ignoreCase = true) }
+                    if (fluxMatch != null) {
+                        onFluxDetected(fluxMatch)
+                    } else {
+                        restart()
+                    }
                 }
 
                 override fun onError(error: Int) {
                     Log.d("WakeWord", "Error: $error")
+                    FluxEvents.emitDebugStatus("Wake word recognizer error=$error; retrying")
                     restart(delayMs = 300)
                 }
 

@@ -4,6 +4,9 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 
 object FluxEvents {
+    private val _wakeWordDetected = MutableSharedFlow<String>(replay = 1, extraBufferCapacity = 8)
+    val wakeWordDetected = _wakeWordDetected.asSharedFlow()
+
     private val _triggerDetected = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val triggerDetected = _triggerDetected.asSharedFlow()
 
@@ -27,6 +30,10 @@ object FluxEvents {
 
     private val _agentSearchTriggered = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val agentSearchTriggered = _agentSearchTriggered.asSharedFlow()
+
+    fun emitWakeWordDetected(transcript: String) {
+        _wakeWordDetected.tryEmit(transcript)
+    }
 
     fun emitTrigger(transcript: String) {
         _triggerDetected.tryEmit(transcript)

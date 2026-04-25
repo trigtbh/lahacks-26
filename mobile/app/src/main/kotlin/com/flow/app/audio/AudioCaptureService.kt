@@ -51,12 +51,14 @@ class AudioCaptureService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val audioCaptureManager = AudioCaptureManager()
+    private lateinit var audioRouteManager: AudioRouteManager
     private lateinit var apiClient: FlowApiClient
     private var loopJob: Job? = null
     private var inAgentSession = false
 
     override fun onCreate() {
         super.onCreate()
+        audioRouteManager = AudioRouteManager(this)
         apiClient = FlowApiClient(BuildConfig.FLOW_API_BASE_URL)
         createNotificationChannel()
         FluxEvents.emitDebugStatus("Audio service created")
@@ -65,9 +67,19 @@ class AudioCaptureService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val userId = intent?.getStringExtra(EXTRA_USER_ID) ?: "akshai"
         startForeground(NOTIF_ID, buildNotification("Listening..."))
+        val routeResult = audioRouteManager.routeToPreferredInput()
+        FluxEvents.emitDebugStatus(routeResult.message)
+        if (!routeResult.routedToPreferredDevice) {
+            FluxEvents.emitError(routeResult.message)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
         FluxEvents.emitDebugStatus("Audio service started for $userId")
         if (loopJob?.isActive != true) {
-            loopJob = scope.launch { runLoop(userId) }
+            loopJob = scope.launch {
+                runLoop(userId)
+            }
         }
         return START_STICKY
     }
@@ -79,7 +91,7 @@ class AudioCaptureService : Service() {
     }
 
     private suspend fun runSession(userId: String) {
-        FluxEvents.emitDebugStatus("Listening locally for speech")
+        FluxEvents.emitDebugStatus("Listening on glasses mic for speech")
         val preRollBytes =
             (AudioCaptureManager.SAMPLE_RATE * AudioCaptureManager.BYTES_PER_SAMPLE * PRE_ROLL_MS / 1000L).toInt()
         val preRollBuffer = RingBuffer(preRollBytes)
@@ -367,6 +379,7 @@ class AudioCaptureService : Service() {
     }
 
     override fun onDestroy() {
+        audioRouteManager.clearRoute()
         scope.cancel()
         super.onDestroy()
     }
