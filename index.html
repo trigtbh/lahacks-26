@@ -12,33 +12,38 @@
   <pre id="result"></pre>
 
   <script>
-    const status = document.getElementById('status');
-    const result = document.getElementById('result');
+    const statusEl = document.getElementById('status');
+    const resultEl = document.getElementById('result');
 
     // --- VAD config ---
-    let SILENCE_THRESHOLD = 12;    // 0–255 RMS; below this = silence (live-updated by slider)
-    const SILENCE_DURATION_MS = 1500; // ms of silence before we consider speech done
-    const MIN_SPEECH_MS = 400;        // ignore clips shorter than this
+    let SILENCE_THRESHOLD    = 12;    // live-updated by slider
+    const SILENCE_DURATION_MS = 1500;
+    const MIN_SPEECH_MS       = 400;
 
     let audioCtx, analyser, mediaRecorder, stream;
-    let chunks = [];
-    let isSpeaking = false;
-    let speechStartTime = 0;
+    let isSpeaking       = false;
+    let speechStartTime  = 0;
     let silenceStartTime = null;
-    let vadInterval = null;
 
-    const slider = document.getElementById('thresholdSlider');
+    // Active recording session state
+    let recordingId  = null;   // UUID assigned by /audio/start
+    let chunkMimeType = '';
+
+    const slider       = document.getElementById('thresholdSlider');
     const thresholdVal = document.getElementById('thresholdVal');
     slider.addEventListener('input', () => {
       SILENCE_THRESHOLD = Number(slider.value);
       thresholdVal.textContent = slider.value;
     });
 
+    // -----------------------------------------------------------------------
+    // Init
+    // -----------------------------------------------------------------------
     async function init() {
       try {
         stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       } catch (e) {
-        status.textContent = 'Mic access denied: ' + e.message;
+        statusEl.textContent = 'Mic access denied: ' + e.message;
         return;
       }
 
@@ -48,102 +53,132 @@
       analyser.fftSize = 512;
       source.connect(analyser);
 
-      startRecorder();
-      vadInterval = setInterval(vadTick, 100);
-      status.textContent = 'Listening...';
+      setInterval(vadTick, 100);
+      statusEl.textContent = 'Listening...';
     }
 
-    function startRecorder() {
-      chunks = [];
-      mediaRecorder = new MediaRecorder(stream);
-      mediaRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-      mediaRecorder.onstop = sendAudio;
-      mediaRecorder.start(100); // collect a chunk every 100ms
-    }
-
+    // -----------------------------------------------------------------------
+    // VAD loop
+    // -----------------------------------------------------------------------
     function vadTick() {
       const buf = new Uint8Array(analyser.frequencyBinCount);
       analyser.getByteFrequencyData(buf);
-
-      // RMS of frequency magnitudes — simple volume proxy
       const rms = Math.sqrt(buf.reduce((s, v) => s + v * v, 0) / buf.length);
       const now = Date.now();
 
       if (rms > SILENCE_THRESHOLD) {
-        // --- Sound detected ---
         if (!isSpeaking) {
-          isSpeaking = true;
+          isSpeaking      = true;
           speechStartTime = now;
-          status.textContent = 'Hearing you...';
+          silenceStartTime = null;
+          onSpeechStart();
         }
-        silenceStartTime = null; // reset silence clock
       } else {
-        // --- Silence ---
         if (isSpeaking) {
           if (silenceStartTime === null) {
-            silenceStartTime = now; // start counting silence
+            silenceStartTime = now;
           } else if (now - silenceStartTime >= SILENCE_DURATION_MS) {
-            // Silence long enough — trigger transcription
-            isSpeaking = false;
+            isSpeaking       = false;
             silenceStartTime = null;
-
-            const speechDuration = now - speechStartTime;
-            if (speechDuration >= MIN_SPEECH_MS) {
-              status.textContent = 'Transcribing...';
-              if (mediaRecorder.state === 'recording') {
-                mediaRecorder.stop(); // fires onstop → sendAudio
-              }
-            } else {
-              // Too short — discard and restart
-              if (mediaRecorder.state === 'recording') mediaRecorder.stop();
-              // onstop will still fire; sendAudio will restart the recorder
-              // but we flag it as a discard
-              chunks = []; // clear before stop so sendAudio sees empty
-              status.textContent = 'Listening...';
-            }
+            const duration   = now - speechStartTime;
+            onSpeechEnd(duration >= MIN_SPEECH_MS);
           }
         }
       }
     }
 
-    async function sendAudio() {
-      if (chunks.length === 0) {
-        // Discarded clip — just restart
-        startRecorder();
-        status.textContent = 'Listening...';
+    // -----------------------------------------------------------------------
+    // Speech-start: call /audio/start, begin MediaRecorder, stream chunks
+    // -----------------------------------------------------------------------
+    async function onSpeechStart() {
+      statusEl.textContent = 'Hearing you...';
+
+      // 1. Open a session on the backend
+      recordingId = crypto.randomUUID();
+      try {
+        const resp = await fetch('/audio/start', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Audio-Sample-Rate': String(audioCtx.sampleRate),
+            'X-Audio-Encoding':    'webm',
+            'X-Audio-Channels':    '1',
+          },
+          body: JSON.stringify({ chunk_id: recordingId, user_id: 'akshai' })
+        });
+        const data = await resp.json();
+      } catch (e) {
+        resultEl.textContent = '[Error starting session] ' + e.message;
         return;
       }
 
-      const blob = new Blob(chunks, { type: mediaRecorder.mimeType });
-      chunks = [];
+      // 2. Start MediaRecorder; each timeslice fires ondataavailable → stream chunk
+      mediaRecorder = new MediaRecorder(stream);
+      chunkMimeType = mediaRecorder.mimeType;
 
-      // Restart recorder immediately so we keep capturing while we await the request
-      startRecorder();
-
-      try {
-        const resp = await fetch('/transcribe', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/octet-stream',
-            'X-Audio-Sample-Rate': String(audioCtx.sampleRate),
-            'X-Audio-Encoding': 'webm',
-            'X-Audio-Channels': '1',
-            'X-User-Id': 'browser-user',
-          },
-          body: blob,
-        });
-
-        const data = await resp.json();
-        if (resp.ok) {
-          result.textContent = data.transcript;
-        } else {
-          result.textContent = '[Error] ' + (data.detail || JSON.stringify(data));
+      mediaRecorder.ondataavailable = async (e) => {
+        if (e.data.size === 0 || !recordingId) return;
+        try {
+          await fetch('/audio/stream', {
+            method:  'POST',
+            headers: {
+              'Content-Type':    'application/octet-stream',
+              'X-Chunk-Id':  recordingId,
+            },
+            body: e.data,
+          });
+        } catch (err) {
+          console.warn('[stream] chunk send failed:', err);
         }
-      } catch (err) {
-        result.textContent = '[Network error] ' + err.message;
+      };
+
+      mediaRecorder.start(200); // emit a chunk every 200ms
+    }
+
+    // -----------------------------------------------------------------------
+    // Speech-end: stop recorder, call /audio/end
+    // -----------------------------------------------------------------------
+    function onSpeechEnd(shouldTranscribe) {
+      if (!mediaRecorder || mediaRecorder.state !== 'recording') return;
+
+      if (!shouldTranscribe) {
+        // Too short — discard without transcribing
+        mediaRecorder.stop();
+        recordingId = null;
+        statusEl.textContent = 'Listening...';
+        return;
       }
 
-      status.textContent = 'Listening...';
+      statusEl.textContent = 'Transcribing...';
+
+      // Stop the recorder; wait for any final ondataavailable to fire, then end
+      mediaRecorder.addEventListener('stop', async () => {
+        // Give the last stream chunk a moment to be sent before calling /audio/end
+        await new Promise(r => setTimeout(r, 150));
+
+        const rid = recordingId;
+        recordingId = null;
+
+        try {
+          const resp = await fetch('/audio/end', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chunk_id: rid, user_id: 'akshai' })
+          });
+          const data = await resp.json();
+          if (resp.ok) {
+            resultEl.textContent = data.transcript;
+          } else {
+            resultEl.textContent = '[Error] ' + (data.detail || JSON.stringify(data));
+          }
+        } catch (err) {
+          resultEl.textContent = '[Network error] ' + err.message;
+        }
+
+        statusEl.textContent = 'Listening...';
+      }, { once: true });
+
+      mediaRecorder.stop();
     }
 
     init();
