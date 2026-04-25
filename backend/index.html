@@ -2,186 +2,578 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Voice Transcriber</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Flux — Voice Demo</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0d0f14;
+      --surface: #161a22;
+      --border: #252b38;
+      --accent: #5b8cff;
+      --accent-dim: #2a3d6e;
+      --green: #3ddc84;
+      --yellow: #f4c542;
+      --red: #ff5f5f;
+      --text: #e8ecf4;
+      --muted: #6b748a;
+      --radius: 12px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', system-ui, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 40px 20px;
+      gap: 28px;
+    }
+
+    header {
+      text-align: center;
+    }
+    header h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      color: var(--text);
+    }
+    header p {
+      color: var(--muted);
+      margin-top: 6px;
+      font-size: 0.95rem;
+    }
+
+    .config-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 0.9rem;
+    }
+    .config-row label { color: var(--muted); }
+    .config-row input[type="text"] {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px 12px;
+      color: var(--text);
+      font-size: 0.9rem;
+      width: 160px;
+      outline: none;
+    }
+    .config-row input[type="text"]:focus { border-color: var(--accent); }
+
+    /* Mic button */
+    .mic-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+    }
+
+    #mic-btn {
+      width: 100px;
+      height: 100px;
+      border-radius: 50%;
+      border: 3px solid var(--accent);
+      background: var(--surface);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.15s, transform 0.1s, box-shadow 0.2s;
+      outline: none;
+      user-select: none;
+    }
+    #mic-btn:hover { background: var(--accent-dim); }
+    #mic-btn.recording {
+      background: var(--accent-dim);
+      border-color: var(--red);
+      box-shadow: 0 0 0 8px rgba(255,95,95,0.18), 0 0 0 16px rgba(255,95,95,0.07);
+      animation: pulse 1.1s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 0 0 8px rgba(255,95,95,0.18), 0 0 0 16px rgba(255,95,95,0.07); }
+      50%       { box-shadow: 0 0 0 14px rgba(255,95,95,0.1), 0 0 0 24px rgba(255,95,95,0.04); }
+    }
+    #mic-btn svg { pointer-events: none; }
+
+    #mic-hint {
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    /* Status pill */
+    #status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 16px;
+      border-radius: 999px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      font-size: 0.85rem;
+      color: var(--muted);
+      transition: all 0.2s;
+    }
+    #status-pill.active { color: var(--accent); border-color: var(--accent); }
+    #status-pill.error  { color: var(--red);    border-color: var(--red); }
+    .dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: currentColor;
+    }
+
+    /* Results panel */
+    .results {
+      width: 100%;
+      max-width: 680px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.78rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+    }
+    .card-header .icon { font-size: 1rem; }
+    .card-body {
+      padding: 16px;
+      font-size: 0.95rem;
+      line-height: 1.5;
+      min-height: 46px;
+      color: var(--text);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .card-body.empty { color: var(--muted); font-style: italic; }
+
+    /* Action badge */
+    .action-badge {
+      display: inline-block;
+      padding: 3px 12px;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .badge-workflow  { background: rgba(91,140,255,0.18); color: var(--accent); }
+    .badge-caltrain  { background: rgba(61,220,132,0.18); color: var(--green); }
+    .badge-agentverse{ background: rgba(244,197,66,0.18); color: var(--yellow); }
+    .badge-unknown   { background: rgba(107,116,138,0.18); color: var(--muted); }
+
+    /* Workflow steps */
+    .step-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 16px;
+    }
+    .step-item {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+    }
+    .step-num {
+      min-width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      background: var(--accent-dim);
+      color: var(--accent);
+      font-size: 0.78rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .step-content { flex: 1; }
+    .step-app {
+      font-size: 0.75rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 2px;
+    }
+    .step-action {
+      font-size: 0.9rem;
+      color: var(--text);
+    }
+    .step-params {
+      margin-top: 4px;
+      font-size: 0.8rem;
+      color: var(--muted);
+      font-family: 'SF Mono', 'Fira Code', monospace;
+    }
+
+    .trigger-phrase {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      background: rgba(91,140,255,0.1);
+      border: 1px solid var(--accent-dim);
+      border-radius: 6px;
+      font-size: 0.85rem;
+      color: var(--accent);
+      margin-bottom: 12px;
+    }
+
+    .divider {
+      height: 1px;
+      background: var(--border);
+      margin: 0 16px;
+    }
+
+    .meta-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 16px;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .meta-row span { color: var(--text); }
+
+    /* Spinner */
+    .spinner {
+      width: 16px; height: 16px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      display: inline-block;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .hidden { display: none !important; }
+  </style>
 </head>
 <body>
-  <h1>Voice Transcriber</h1>
-  <p id="status">Initializing mic...</p>
-  <label>Silence threshold: <input type="range" id="thresholdSlider" min="1" max="60" value="12"> <span id="thresholdVal">12</span></label>
-  <p><strong>Transcript:</strong></p>
-  <pre id="result"></pre>
 
-  <script>
-    const statusEl = document.getElementById('status');
-    const resultEl = document.getElementById('result');
+  <header>
+    <h1>Flux</h1>
+    <p>Say "Flux, [your command]" — e.g. "Flux, create a workflow that emails my team when I'm running late"</p>
+  </header>
 
-    // --- VAD config ---
-    let SILENCE_THRESHOLD    = 12;    // live-updated by slider
-    const SILENCE_DURATION_MS = 1500;
-    const MIN_SPEECH_MS       = 400;
+  <div class="config-row">
+    <label for="user-id-input">User ID</label>
+    <input type="text" id="user-id-input" value="demo_user" spellcheck="false">
+  </div>
 
-    let audioCtx, analyser, mediaRecorder, stream;
-    let isSpeaking       = false;
-    let speechStartTime  = 0;
-    let silenceStartTime = null;
+  <div class="mic-wrap">
+    <button id="mic-btn" title="Hold to record">
+      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="9" y="2" width="6" height="12" rx="3"/>
+        <path d="M5 10a7 7 0 0 0 14 0"/>
+        <line x1="12" y1="19" x2="12" y2="22"/>
+        <line x1="8" y1="22" x2="16" y2="22"/>
+      </svg>
+    </button>
+    <div id="mic-hint">Hold to record</div>
+  </div>
 
-    // Active recording session state
-    let recordingId  = null;   // UUID assigned by /audio/start
-    let chunkMimeType = '';
+  <div id="status-pill"><span class="dot"></span><span id="status-text">Ready</span></div>
 
-    const slider       = document.getElementById('thresholdSlider');
-    const thresholdVal = document.getElementById('thresholdVal');
-    slider.addEventListener('input', () => {
-      SILENCE_THRESHOLD = Number(slider.value);
-      thresholdVal.textContent = slider.value;
-    });
+  <div class="results" id="results-panel">
 
-    // -----------------------------------------------------------------------
-    // Init
-    // -----------------------------------------------------------------------
-    async function init() {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      } catch (e) {
-        statusEl.textContent = 'Mic access denied: ' + e.message;
-        return;
-      }
+    <!-- Transcript -->
+    <div class="card" id="card-transcript">
+      <div class="card-header"><span class="icon">🎙</span> Heard</div>
+      <div class="card-body empty" id="transcript-body">Nothing yet…</div>
+    </div>
 
-      audioCtx = new AudioContext();
-      const source = audioCtx.createMediaStreamSource(stream);
-      analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 512;
-      source.connect(analyser);
+    <!-- Command -->
+    <div class="card hidden" id="card-command">
+      <div class="card-header"><span class="icon">⚡</span> Extracted command</div>
+      <div class="card-body" id="command-body"></div>
+    </div>
 
-      setInterval(vadTick, 100);
-      statusEl.textContent = 'Listening...';
-    }
+    <!-- Action -->
+    <div class="card hidden" id="card-action">
+      <div class="card-header"><span class="icon">🎯</span> Action</div>
+      <div class="card-body" id="action-body"></div>
+    </div>
 
-    // -----------------------------------------------------------------------
-    // VAD loop
-    // -----------------------------------------------------------------------
-    function vadTick() {
-      const buf = new Uint8Array(analyser.frequencyBinCount);
-      analyser.getByteFrequencyData(buf);
-      const rms = Math.sqrt(buf.reduce((s, v) => s + v * v, 0) / buf.length);
-      const now = Date.now();
+    <!-- Workflow result -->
+    <div class="card hidden" id="card-workflow">
+      <div class="card-header"><span class="icon">🔧</span> Workflow created</div>
+      <div id="workflow-body"></div>
+    </div>
 
-      if (rms > SILENCE_THRESHOLD) {
-        if (!isSpeaking) {
-          isSpeaking      = true;
-          speechStartTime = now;
-          silenceStartTime = null;
-          onSpeechStart();
-        }
-      } else {
-        if (isSpeaking) {
-          if (silenceStartTime === null) {
-            silenceStartTime = now;
-          } else if (now - silenceStartTime >= SILENCE_DURATION_MS) {
-            isSpeaking       = false;
-            silenceStartTime = null;
-            const duration   = now - speechStartTime;
-            onSpeechEnd(duration >= MIN_SPEECH_MS);
-          }
-        }
-      }
-    }
+  </div>
 
-    // -----------------------------------------------------------------------
-    // Speech-start: call /audio/start, begin MediaRecorder, stream chunks
-    // -----------------------------------------------------------------------
-    async function onSpeechStart() {
-      statusEl.textContent = 'Hearing you...';
+<script>
+  const micBtn       = document.getElementById('mic-btn');
+  const micHint      = document.getElementById('mic-hint');
+  const statusPill   = document.getElementById('status-pill');
+  const statusText   = document.getElementById('status-text');
 
-      // 1. Open a session on the backend
+  const cardTranscript = document.getElementById('card-transcript');
+  const transcriptBody = document.getElementById('transcript-body');
+  const cardCommand    = document.getElementById('card-command');
+  const commandBody    = document.getElementById('command-body');
+  const cardAction     = document.getElementById('card-action');
+  const actionBody     = document.getElementById('action-body');
+  const cardWorkflow   = document.getElementById('card-workflow');
+  const workflowBody   = document.getElementById('workflow-body');
+
+  let mediaRecorder = null;
+  let stream        = null;
+  let recordingId   = null;
+  let isRecording   = false;
+  let audioCtx      = null;
+
+  function setStatus(text, type = '') {
+    statusText.textContent = text;
+    statusPill.className = 'status-pill' + (type ? ' ' + type : '');
+    // re-apply the base id styling
+    statusPill.id = 'status-pill';
+    if (type) statusPill.classList.add(type);
+  }
+
+  function getUserId() {
+    return document.getElementById('user-id-input').value.trim() || 'demo_user';
+  }
+
+  function resetResults() {
+    transcriptBody.textContent = 'Nothing yet…';
+    transcriptBody.className = 'card-body empty';
+    cardCommand.classList.add('hidden');
+    cardAction.classList.add('hidden');
+    cardWorkflow.classList.add('hidden');
+  }
+
+  // ── Mic permission + stream ──────────────────────────────────────────────
+  async function ensureStream() {
+    if (stream) return stream;
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    audioCtx = new AudioContext();
+    return stream;
+  }
+
+  // ── Push-to-talk ─────────────────────────────────────────────────────────
+  micBtn.addEventListener('mousedown',  startRecording);
+  micBtn.addEventListener('touchstart', e => { e.preventDefault(); startRecording(); }, { passive: false });
+  micBtn.addEventListener('mouseup',    stopRecording);
+  micBtn.addEventListener('mouseleave', stopRecording);
+  micBtn.addEventListener('touchend',   stopRecording);
+
+  async function startRecording() {
+    if (isRecording) return;
+    isRecording = true;
+    resetResults();
+    setStatus('Recording…', 'active');
+    micBtn.classList.add('recording');
+    micHint.textContent = 'Release to send';
+
+    try {
+      const s = await ensureStream();
       recordingId = crypto.randomUUID();
-      try {
-        const resp = await fetch('/audio/start', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Audio-Sample-Rate': String(audioCtx.sampleRate),
-            'X-Audio-Encoding':    'webm',
-            'X-Audio-Channels':    '1',
-          },
-          body: JSON.stringify({ chunk_id: recordingId, user_id: 'akshai' })
-        });
-        const data = await resp.json();
-      } catch (e) {
-        resultEl.textContent = '[Error starting session] ' + e.message;
-        return;
-      }
+      const userId = getUserId();
 
-      // 2. Start MediaRecorder; each timeslice fires ondataavailable → stream chunk
-      mediaRecorder = new MediaRecorder(stream);
-      chunkMimeType = mediaRecorder.mimeType;
+      // Open session
+      await fetch('/audio/start', {
+        method: 'POST',
+        headers: {
+          'Content-Type':          'application/json',
+          'X-Audio-Sample-Rate':   String(audioCtx ? audioCtx.sampleRate : 48000),
+          'X-Audio-Encoding':      'webm',
+          'X-Audio-Channels':      '1',
+        },
+        body: JSON.stringify({ chunk_id: recordingId, user_id: userId }),
+      });
 
+      mediaRecorder = new MediaRecorder(s);
       mediaRecorder.ondataavailable = async (e) => {
         if (e.data.size === 0 || !recordingId) return;
-        try {
-          await fetch('/audio/stream', {
-            method:  'POST',
-            headers: {
-              'Content-Type':    'application/octet-stream',
-              'X-Chunk-Id':  recordingId,
-            },
-            body: e.data,
-          });
-        } catch (err) {
-          console.warn('[stream] chunk send failed:', err);
-        }
+        await fetch('/audio/stream', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/octet-stream', 'X-Chunk-Id': recordingId },
+          body:    e.data,
+        }).catch(() => {});
       };
-
-      mediaRecorder.start(200); // emit a chunk every 200ms
+      mediaRecorder.start(200);
+    } catch (err) {
+      setStatus('Mic error: ' + err.message, 'error');
+      isRecording = false;
+      micBtn.classList.remove('recording');
+      micHint.textContent = 'Hold to record';
     }
+  }
 
-    // -----------------------------------------------------------------------
-    // Speech-end: stop recorder, call /audio/end
-    // -----------------------------------------------------------------------
-    function onSpeechEnd(shouldTranscribe) {
-      if (!mediaRecorder || mediaRecorder.state !== 'recording') return;
+  async function stopRecording() {
+    if (!isRecording || !mediaRecorder || mediaRecorder.state !== 'recording') return;
+    isRecording = false;
+    micBtn.classList.remove('recording');
+    micHint.textContent = 'Hold to record';
+    setStatus('Transcribing…', 'active');
 
-      if (!shouldTranscribe) {
-        // Too short — discard without transcribing
-        mediaRecorder.stop();
-        recordingId = null;
-        statusEl.textContent = 'Listening...';
+    mediaRecorder.addEventListener('stop', async () => {
+      await new Promise(r => setTimeout(r, 150));
+      const rid    = recordingId;
+      const userId = getUserId();
+      recordingId  = null;
+
+      // ── /audio/end ────────────────────────────────────────────────────────
+      let audioData;
+      try {
+        const resp = await fetch('/audio/end', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ chunk_id: rid, user_id: userId }),
+        });
+        audioData = await resp.json();
+        if (!resp.ok) throw new Error(audioData.detail || JSON.stringify(audioData));
+      } catch (err) {
+        setStatus('Error: ' + err.message, 'error');
+        transcriptBody.textContent = err.message;
+        transcriptBody.className = 'card-body';
         return;
       }
 
-      statusEl.textContent = 'Transcribing...';
+      // Show transcript
+      const transcript = audioData.transcript || '';
+      const command    = audioData.command    || '';
+      const action     = audioData.action     || 'unknown';
 
-      // Stop the recorder; wait for any final ondataavailable to fire, then end
-      mediaRecorder.addEventListener('stop', async () => {
-        // Give the last stream chunk a moment to be sent before calling /audio/end
-        await new Promise(r => setTimeout(r, 150));
+      transcriptBody.textContent = transcript || '(silence or unintelligible)';
+      transcriptBody.className   = 'card-body' + (transcript ? '' : ' empty');
 
-        const rid = recordingId;
-        recordingId = null;
+      // Show command
+      if (command) {
+        commandBody.textContent = command;
+        cardCommand.classList.remove('hidden');
+      }
+
+      // Show action badge
+      const badgeClass = {
+        workflow:         'badge-workflow',
+        caltrain:         'badge-caltrain',
+        agentverse_search:'badge-agentverse',
+      }[action] || 'badge-unknown';
+
+      actionBody.innerHTML = `<span class="action-badge ${badgeClass}">${action.replace(/_/g,' ')}</span>`;
+
+      if (action === 'unknown' && !command) {
+        actionBody.innerHTML += `<span style="color:var(--muted);font-size:0.85rem;margin-left:10px">No Flux trigger word detected</span>`;
+      } else if (action === 'caltrain') {
+        actionBody.innerHTML += `<span style="color:var(--muted);font-size:0.85rem;margin-left:10px">Would connect to the Caltrain agent</span>`;
+      } else if (action === 'agentverse_search') {
+        actionBody.innerHTML += `<span style="color:var(--muted);font-size:0.85rem;margin-left:10px">Would search Agentverse for <strong>${audioData.agent_name}</strong></span>`;
+      }
+      cardAction.classList.remove('hidden');
+
+      // ── Workflow creation ─────────────────────────────────────────────────
+      if (action === 'workflow' && command) {
+        setStatus('Creating workflow…', 'active');
+        workflowBody.innerHTML = `<div style="padding:20px;display:flex;align-items:center;gap:10px;color:var(--muted)"><span class="spinner"></span> Generating workflow…</div>`;
+        cardWorkflow.classList.remove('hidden');
 
         try {
-          const resp = await fetch('/audio/end', {
+          const wResp = await fetch('/workflow/create', {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chunk_id: rid, user_id: 'akshai' })
+            body:    JSON.stringify({ user_id: userId, transcript: command }),
           });
-          const data = await resp.json();
-          if (resp.ok) {
-            resultEl.textContent = data.transcript;
-          } else {
-            resultEl.textContent = '[Error] ' + (data.detail || JSON.stringify(data));
-          }
+          const wData = await wResp.json();
+          if (!wResp.ok) throw new Error(wData.detail || JSON.stringify(wData));
+
+          renderWorkflow(wData);
+          setStatus('Workflow saved', 'active');
         } catch (err) {
-          resultEl.textContent = '[Network error] ' + err.message;
+          workflowBody.innerHTML = `<div class="card-body" style="color:var(--red)">Failed: ${escHtml(err.message)}</div>`;
+          setStatus('Workflow error', 'error');
+          return;
         }
+      } else {
+        setStatus('Done', '');
+      }
+    }, { once: true });
 
-        statusEl.textContent = 'Listening...';
-      }, { once: true });
+    mediaRecorder.stop();
+  }
 
-      mediaRecorder.stop();
+  function renderWorkflow(w) {
+    const steps = w.steps || [];
+    const errors = w.validation_errors || [];
+
+    let html = '';
+
+    // Trigger phrase
+    html += `<div style="padding:14px 16px 0">`;
+    html += `<div class="trigger-phrase">⚡ Trigger: "${escHtml(w.trigger_phrase)}"</div>`;
+    if (w.confidence != null) {
+      html += `<div style="font-size:0.78rem;color:var(--muted);margin-top:-4px;margin-bottom:8px">Confidence: ${Math.round(w.confidence * 100)}% &nbsp;·&nbsp; ID: <code style="font-family:monospace">${escHtml(w.workflow_id)}</code></div>`;
+    }
+    html += `</div>`;
+
+    // Steps
+    if (steps.length > 0) {
+      html += `<div class="step-list">`;
+      steps.forEach((step, i) => {
+        const params = step.params || {};
+        const paramStr = Object.entries(params)
+          .filter(([, v]) => v !== null && v !== '')
+          .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)
+          .join('  ·  ');
+
+        html += `
+          <div class="step-item">
+            <div class="step-num">${i + 1}</div>
+            <div class="step-content">
+              <div class="step-app">${escHtml(step.app || '—')}</div>
+              <div class="step-action">${escHtml(step.action || '—')}</div>
+              ${paramStr ? `<div class="step-params">${escHtml(paramStr)}</div>` : ''}
+            </div>
+          </div>`;
+      });
+      html += `</div>`;
+    } else {
+      html += `<div class="card-body empty">No steps returned.</div>`;
     }
 
-    init();
-  </script>
+    // Missing params / errors
+    if (w.missing_params && w.missing_params.length > 0) {
+      html += `<div class="divider"></div>`;
+      html += `<div class="meta-row">Missing params: <span style="color:var(--yellow)">${escHtml(w.missing_params.join(', '))}</span></div>`;
+    }
+    if (errors.length > 0) {
+      html += `<div class="divider"></div>`;
+      html += `<div class="meta-row" style="flex-direction:column;align-items:flex-start;gap:4px">`;
+      html += `<span style="color:var(--red)">Validation warnings</span>`;
+      errors.forEach(e => { html += `<span style="font-size:0.8rem;color:var(--muted)">${escHtml(e)}</span>`; });
+      html += `</div>`;
+    }
+
+    workflowBody.innerHTML = html;
+  }
+
+  function escHtml(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+</script>
 </body>
 </html>

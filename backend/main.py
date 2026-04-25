@@ -1,3 +1,5 @@
+from dotenv import load_dotenv
+load_dotenv()
 import difflib
 import os
 import re
@@ -5,14 +7,13 @@ import base64
 import struct
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from elevenlabs.client import AsyncElevenLabs
-from deepgram import DeepgramClient
-from dotenv import load_dotenv
+from deepgram import DeepgramClient, PrerecordedOptions
 
-load_dotenv()
 
 from agentverse_client import find_agent, send_to_agent, start_gateway
 import session_store as sessions
@@ -85,9 +86,12 @@ class AudioSessionRequest(BaseModel):
     user_id: str
 
 
+_BASE_DIR = Path(__file__).parent
+
+
 @app.get("/")
 async def serve_index():
-    return FileResponse("index.html")
+    return FileResponse(_BASE_DIR / "index.html")
 
 
 # ---------------------------------------------------------------------------
@@ -345,20 +349,18 @@ async def audio_end(payload: AudioSessionRequest):
     try:
         mime_type = "audio/wav" if filename.endswith(".wav") else "audio/webm"
         logger.info(f"[audio/end] sending {len(audio_bytes)}B to Deepgram filename={filename}")
-        options = {
-            "model": "nova-3",
-            "language": "en",
-            "smart_format": True,
-            "keywords": ["Flux:2", "workflow:2"],
-        }
-        response = await asyncio.to_thread(
-            client_deepgram.listen.v1.rest.transcribe_file,
+        options = PrerecordedOptions(
+            model="nova-3",
+            language="en",
+            smart_format=True,
+        )
+        response = await client_deepgram.listen.asyncrest.v("1").transcribe_file(
             {"buffer": audio_bytes, "mimetype": mime_type},
             options,
         )
         transcript = (
-            response["results"]["channels"][0]["alternatives"][0]["transcript"]
-            if response.get("results") and response["results"].get("channels")
+            response.results.channels[0].alternatives[0].transcript
+            if response.results and response.results.channels
             else ""
         )
         logger.info(f"[audio/end] transcript={transcript!r}")
