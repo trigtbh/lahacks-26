@@ -3,6 +3,7 @@ package com.flow.app.audio
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -40,18 +41,21 @@ class AudioCaptureManager {
      */
     fun audioChunks(): Flow<ByteArray> = flow {
         val recorder = AudioRecord(
-            MediaRecorder.AudioSource.VOICE_COMMUNICATION,  // routes through HFP mic
+            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
             SAMPLE_RATE,
             CHANNEL_CONFIG,
             AUDIO_FORMAT,
             bufferSize
         )
 
+        Log.d("Flux/Audio", "recorder.state=${recorder.state} bufferSize=$bufferSize")
         try {
             recorder.startRecording()
+            Log.d("Flux/Audio", "recordingState=${recorder.recordingState}")
             val buffer = ByteArray(bufferSize)
             while (coroutineContext.isActive) {
                 val bytesRead = recorder.read(buffer, 0, buffer.size)
+                Log.d("Flux/Audio", "bytesRead=$bytesRead")
                 if (bytesRead > 0) {
                     emit(buffer.copyOf(bytesRead))
                 }

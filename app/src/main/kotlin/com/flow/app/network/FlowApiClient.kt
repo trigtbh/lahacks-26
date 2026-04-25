@@ -16,6 +16,11 @@ data class TranscriptResponse(
     val partial: Boolean,
 )
 
+data class EndAudioResponse(
+    val transcript: String,
+    val command: String,
+)
+
 data class WorkflowRequest(
     val triggerPhrase: String,
     val userId: String,
@@ -72,7 +77,7 @@ class FlowApiClient(baseUrl: String) {
      * Signals the backend that the audio chunk session is complete.
      * Must be called after the last chunk for this chunkId.
      */
-    suspend fun endAudio(chunkId: String, userId: String): Result<Unit> =
+    suspend fun endAudio(chunkId: String, userId: String): Result<EndAudioResponse> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val body = JSONObject().apply {
@@ -87,6 +92,11 @@ class FlowApiClient(baseUrl: String) {
                 check(response.isSuccessful) {
                     "Audio end error ${response.code}: ${response.body?.string()}"
                 }
+                val res = JSONObject(response.body!!.string())
+                EndAudioResponse(
+                    transcript = res.optString("transcript", ""),
+                    command = res.optString("command", ""),
+                )
             }
         }
 

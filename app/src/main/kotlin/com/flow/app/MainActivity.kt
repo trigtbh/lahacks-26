@@ -61,18 +61,24 @@ fun FlowScreen(viewModel: FlowViewModel) {
             Spacer(modifier = Modifier.height(16.dp))
             Text(text = state.statusMessage, style = MaterialTheme.typography.bodyLarge)
 
-            if (state.triggerMessage.isNotEmpty()) {
+            if (state.workflowCommand.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(24.dp))
                 Card(
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.primaryContainer
                     )
                 ) {
-                    Text(
-                        text = state.triggerMessage,
-                        modifier = Modifier.padding(16.dp),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Creating workflow",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = state.workflowCommand,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
                 }
             }
         }
