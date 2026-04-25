@@ -359,7 +359,19 @@ async def _dominos_order_pizza(user_id: str, params: dict) -> dict:
     result = resp.json()
     log.info("Dominos order user=%s store=%s price=%s placed=%s",
              user_id, result.get("storeID"), result.get("price"), result.get("placed"))
+
+    # Persist the order so reorder_last can replay it
+    if result.get("placed"):
+        await token_store.save_token(user_id, "dominos_last_order", {"items": items})
+
     return result
+
+
+async def _dominos_reorder_last(user_id: str, params: dict) -> dict:
+    last = await token_store.get_token(user_id, "dominos_last_order")
+    if not last or not last.get("items"):
+        raise ValueError("No previous Domino's order found — place an order first")
+    return await _dominos_order_pizza(user_id, {"items": last["items"]})
 
 
 # ─────────────────────────────────────────────
@@ -571,6 +583,7 @@ _OAUTH_HANDLERS: dict[tuple[str, str], Any] = {
     ("google_drive",     "share_file"):      _drive_share_file,
     ("google_flights",   "search_flights"):  _flights_search_flights,
     ("dominos",          "order_pizza"):     _dominos_order_pizza,
+    ("dominos",          "reorder_last"):    _dominos_reorder_last,
 }
 
 _SLACK_ACTIONS = {"send_dm", "send_channel"}
