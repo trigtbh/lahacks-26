@@ -1,7 +1,6 @@
-version: '3.8'
-
 services:
   web:
+    container_name: flux
     build: .
     ports:
       - "8000:8000"
