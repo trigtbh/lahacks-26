@@ -5,6 +5,7 @@ pydantic
 motor
 python-dotenv
 elevenlabs
+deepgram-sdk
 uagents
 httpx
 # Google APIs (Gmail + Calendar)

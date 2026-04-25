@@ -1,5 +1,4 @@
 import difflib
-import io
 import os
 import re
 import base64
@@ -10,6 +9,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from elevenlabs.client import AsyncElevenLabs
+from deepgram import DeepgramClient, PrerecordedOptions, BufferSource
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -26,8 +26,10 @@ from ai.validator import validate
 
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
 ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")  # "George"
+DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY", "")
 
 client_elevenlabs = AsyncElevenLabs(api_key=ELEVENLABS_API_KEY)
+client_deepgram = DeepgramClient(api_key=DEEPGRAM_API_KEY)
 
 
 async def _tts_pcm(text: str) -> str | None:
@@ -277,21 +279,29 @@ async def audio_end(payload: AudioSessionRequest):
         filename = "audio.webm"
 
     try:
-        audio_file = io.BytesIO(audio_bytes)
-        audio_file.name = filename
-        logger.info(f"[audio/end] sending {len(audio_bytes)}B to ElevenLabs filename={filename}")
-        result = await client_elevenlabs.speech_to_text.convert(
-            file=audio_file,
-            model_id="scribe_v2",
-            language_code="en",
-            tag_audio_events=False,
-            keyterms=["Flux", "workflow"],
+        mime_type = "audio/wav" if filename.endswith(".wav") else "audio/webm"
+        logger.info(f"[audio/end] sending {len(audio_bytes)}B to Deepgram filename={filename}")
+        payload_dg: BufferSource = {"buffer": audio_bytes}
+        options = PrerecordedOptions(
+            model="nova-3",
+            language="en",
+            smart_format=True,
+            keywords=["Flux:2", "workflow:2"],
+            mimetype=mime_type,
         )
-        transcript = result.text
+        response = await client_deepgram.listen.asyncrest.v("1").transcribe_file(
+            payload_dg,
+            options,
+        )
+        transcript = (
+            response.results.channels[0].alternatives[0].transcript
+            if response.results and response.results.channels
+            else ""
+        )
         logger.info(f"[audio/end] transcript={transcript!r}")
     except Exception as e:
-        logger.error(f"[audio/end] ElevenLabs error: {e}", exc_info=True)
-        raise HTTPException(status_code=502, detail=f"ElevenLabs transcription failed: {e}")
+        logger.error(f"[audio/end] Deepgram error: {e}", exc_info=True)
+        raise HTTPException(status_code=502, detail=f"Deepgram transcription failed: {e}")
 
     command = _extract_after_flux(transcript)
     action, agent_name = _classify_command(command)
@@ -376,8 +386,8 @@ async def workflow_execute(payload: WorkflowRequest):
         return await _respond("agent_message", [f"Sent to {session.agent_name}"], reply)
 
     # 4. No active session — fallback
-    return await _respond("no_agent", [],
-                          "Say 'connect to agent name' to start talking to an agent.")
+    # Relaxed the fallback to avoid spamming the user on random background noise.
+    return await _respond("no_agent", [], "")
 
 
 # ---------------------------------------------------------------------------
