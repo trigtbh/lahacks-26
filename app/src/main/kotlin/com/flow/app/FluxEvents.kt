@@ -13,6 +13,9 @@ object FluxEvents {
     private val _workflowTriggered = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val workflowTriggered = _workflowTriggered.asSharedFlow()
 
+    private val _caltrainTriggered = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
+    val caltrainTriggered = _caltrainTriggered.asSharedFlow()
+
     fun emitTrigger(transcript: String) {
         _triggerDetected.tryEmit(transcript)
     }
@@ -23,5 +26,9 @@ object FluxEvents {
 
     fun emitWorkflowTriggered(command: String) {
         _workflowTriggered.tryEmit(command)
+    }
+
+    fun emitCaltrainTriggered() {
+        _caltrainTriggered.tryEmit(Unit)
     }
 }

@@ -19,6 +19,7 @@ data class TranscriptResponse(
 data class EndAudioResponse(
     val transcript: String,
     val command: String,
+    val action: String,
 )
 
 data class WorkflowRequest(
@@ -97,6 +98,7 @@ class FlowApiClient(baseUrl: String) {
                 EndAudioResponse(
                     transcript = res.optString("transcript", ""),
                     command = res.optString("command", ""),
+                    action = res.optString("action", "unknown"),
                 )
             }
         }

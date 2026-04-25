@@ -15,6 +15,7 @@ import androidx.core.app.NotificationCompat
 import com.flow.app.BuildConfig
 import com.flow.app.FluxEvents
 import com.flow.app.network.FlowApiClient
+import com.flow.app.network.WorkflowRequest
 import kotlinx.coroutines.*
 import kotlin.math.sqrt
 
@@ -91,11 +92,22 @@ class AudioCaptureService : Service() {
         if (hadSpeech) {
             withContext(NonCancellable) {
                 apiClient.endAudio(chunkId, userId).onSuccess { resp ->
-                    Log.d("Flux/End", "transcript=${resp.transcript}")
-                    if (containsFlux(resp.transcript)) {
-                        FluxEvents.emitTrigger(resp.transcript)
-                        if (containsWorkflow(resp.transcript)) {
+                    Log.d("Flux/End", "transcript=${resp.transcript} action=${resp.action}")
+                    when (resp.action) {
+                        "workflow" -> {
+                            FluxEvents.emitTrigger(resp.transcript)
                             FluxEvents.emitWorkflowTriggered(resp.command)
+                        }
+                        "caltrain" -> {
+                            FluxEvents.emitTrigger(resp.transcript)
+                            FluxEvents.emitCaltrainTriggered()
+                            apiClient.executeWorkflow(
+                                WorkflowRequest(
+                                    triggerPhrase = resp.transcript,
+                                    userId = userId,
+                                    context = mapOf("source" to "glasses_mic", "chunk_id" to chunkId),
+                                )
+                            )
                         }
                     }
                 }
@@ -105,12 +117,6 @@ class AudioCaptureService : Service() {
             Log.d("Flux/VAD", "session $chunkId had no speech, skipping end")
         }
     }
-
-    private fun containsFlux(text: String) =
-        listOf("flux", "flock", "flex", "flocks", "flax", "fluke").any { text.contains(it, ignoreCase = true) }
-
-    private fun containsWorkflow(text: String) =
-        listOf("workflow", "work flow", "workload", "work-flow", "work").any { text.contains(it, ignoreCase = true) }
 
     private fun calculateRms(pcm: ByteArray): Double {
         var sum = 0.0

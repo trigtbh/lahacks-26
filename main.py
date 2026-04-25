@@ -111,9 +111,36 @@ def _build_wav(pcm_data: bytes, sample_rate: int, channels: int, bit_depth: int 
 _FLUX_VARIANTS      = ["flux", "flock", "flex", "flocks", "flax", "fluke", "blacks"]
 _WORKFLOW_VARIANTS  = ["workflow", "workload", "work-flow", "work"]
 
+_COMMAND_VARIANTS = {
+    "workflow": [
+        "create a workflow", "create workflow", "make a workflow", "make workflow",
+        "build a workflow", "build workflow", "start a workflow", "new workflow",
+    ],
+    "caltrain": [
+        "talk to caltrain", "caltrain", "talk to cal train", "cal train",
+        "train schedule", "next train", "train times",
+    ],
+}
+
 def _word_fuzzy_matches(word: str, targets: list, threshold: float = 0.75) -> bool:
     w = word.lower().strip(".,!?\"'-")
     return any(difflib.SequenceMatcher(None, w, t).ratio() >= threshold for t in targets)
+
+def _classify_command(command: str) -> str:
+    """Return the best matching action name for the text after 'flux', or 'unknown'."""
+    if not command:
+        return "unknown"
+    text = command.lower().strip()
+    best_action = "unknown"
+    best_score = 0.4
+    for action, variants in _COMMAND_VARIANTS.items():
+        for variant in variants:
+            score = difflib.SequenceMatcher(None, text, variant).ratio()
+            if score > best_score:
+                best_score = score
+                best_action = action
+    logger.info(f"[classify] command={command!r} action={best_action} score={best_score:.2f}")
+    return best_action
 
 def _normalize_pcm(pcm: bytes, target_peak: float = 0.9) -> bytes:
     """Scale 16-bit PCM so the loudest sample hits target_peak of full scale."""
@@ -232,13 +259,15 @@ async def audio_end(payload: AudioSessionRequest):
         raise HTTPException(status_code=502, detail=f"ElevenLabs transcription failed: {e}")
 
     command = _extract_after_flux(transcript)
-    logger.info(f"[audio/end] command after flux={command!r}")
+    action = _classify_command(command)
+    logger.info(f"[audio/end] command={command!r} action={action}")
 
     return JSONResponse({
         "chunk_id": chunk_id,
         "user_id": meta["user_id"],
         "transcript": transcript,
         "command": command,
+        "action": action,
     })
 
 

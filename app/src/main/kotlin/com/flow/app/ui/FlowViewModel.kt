@@ -56,6 +56,15 @@ class FlowViewModel(app: Application) : AndroidViewModel(app) {
                 tts?.speak("Workflow will be created", TextToSpeech.QUEUE_FLUSH, null, null)
             }
         }
+        viewModelScope.launch {
+            FluxEvents.caltrainTriggered.collect {
+                _uiState.value = _uiState.value.copy(
+                    statusMessage = "Talking to Caltrain...",
+                    workflowCommand = "Connecting to Caltrain agent",
+                )
+                tts?.speak("Connecting to Caltrain", TextToSpeech.QUEUE_FLUSH, null, null)
+            }
+        }
     }
 
     fun onPermissionsGranted() {
