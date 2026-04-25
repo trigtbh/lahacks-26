@@ -96,7 +96,7 @@ async def lifespan(app: FastAPI):
     start_gateway()
     yield
 
-_BASE_DIR = Path(__file__).parent
+_BASE_DIR = Path(__file__).parent / "static" / "onboarding"
 
 app = FastAPI(lifespan=lifespan)
 
@@ -373,9 +373,11 @@ async def audio_end(payload: AudioSessionRequest):
         audio_bytes = _build_wav(_normalize_pcm(audio_data), sample_rate=meta["sample_rate"],
                                   channels=meta["channels"], bit_depth=16)
         filename = "audio.wav"
+        mime_type = "audio/wav"
     else:
         audio_bytes = audio_data
         filename = "audio.webm"
+        mime_type = "audio/webm"
 
     try:
         logger.info(f"[audio/end] sending {len(audio_bytes)}B to Deepgram filename={filename}")
