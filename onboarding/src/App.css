@@ -140,17 +140,17 @@ body::after {
 
 .welcome-chad {
   flex: 1;
-  position: relative;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
   overflow: hidden;
 }
 
 .chad-img {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  object-position: top center;
+  height: 70vh;
+  width: auto;
+  object-fit: contain;
+  object-position: bottom center;
 }
 
 .welcome-brand {
