@@ -3,10 +3,10 @@ llm.py
 Single source of truth for LLM access across the AI layer.
 
 Every other AI file (classifier, validator, resolver, dialogue, executor)
-imports from here. Do NOT instantiate genai.Client elsewhere.
+imports from here. Do NOT instantiate OpenAI clients elsewhere.
 
-Supports the new google-genai SDK and is model-swappable via LLM_MODEL env var.
-Tested with gemini-2.5-flash and gemma-4-* models for the hackathon Gemma track.
+Uses the OpenAI SDK pointed at OpenRouter to access Gemma models.
+Model is swappable via LLM_MODEL env var.
 """
 
 from __future__ import annotations
@@ -18,8 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
+from openai import OpenAI
 
 
 # Load .env from the ai/ dir first (this file's neighbour), then fall back to
@@ -31,14 +30,14 @@ load_dotenv(_AI_DIR.parent / ".env")
 load_dotenv()
 
 
-_DEFAULT_MODEL = "gemini-2.5-flash"
+_DEFAULT_MODEL = "google/gemma-4-31b-it"
 
 
 def _get_api_key() -> str:
-    key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    key = os.getenv("OPENROUTER_API_KEY")
     if not key:
         raise RuntimeError(
-            "No API key found. Set GEMINI_API_KEY or GOOGLE_API_KEY in .env."
+            "No API key found. Set OPENROUTER_API_KEY in .env."
         )
     return key
 
@@ -47,17 +46,15 @@ def _get_model() -> str:
     return os.getenv("LLM_MODEL", _DEFAULT_MODEL)
 
 
-def _is_gemma(model: str) -> bool:
-    """Gemma models share the same client but don't support response_mime_type."""
-    return model.lower().startswith("gemma")
-
-
 # Module-level client. Single instance shared across the AI layer.
-client = genai.Client(api_key=_get_api_key())
+client = OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=_get_api_key(),
+)
 
 
 # ─────────────────────────────────────────────
-# Fence stripping (Gemma fallback only — Gemini in JSON mode returns clean JSON)
+# Fence stripping (Gemma doesn't support response_format=json reliably)
 # ─────────────────────────────────────────────
 
 _FENCE_OPEN_RE = re.compile(r"^\s*```(?:json)?\s*\n?", re.IGNORECASE)
@@ -82,30 +79,25 @@ def generate_json(
     """
     Call the LLM and parse its response as a JSON object.
 
-    For Gemini: uses response_mime_type="application/json" so the model returns
-    a clean JSON string with no markdown fences.
-    For Gemma: omits response_mime_type (unsupported) and strips fences as fallback.
+    Always strips markdown fences as a safety net, since Gemma models
+    may wrap JSON in ```json ... ``` blocks.
 
     Raises:
         ValueError: if the response is not parseable JSON or not a JSON object.
     """
     model = _get_model()
-    config_kwargs: dict[str, Any] = {
-        "system_instruction": system_instruction,
-        "temperature": temperature,
-    }
-    if not _is_gemma(model):
-        config_kwargs["response_mime_type"] = "application/json"
 
-    response = client.models.generate_content(
+    response = client.chat.completions.create(
         model=model,
-        contents=user_prompt,
-        config=types.GenerateContentConfig(**config_kwargs),
+        messages=[
+            {"role": "system", "content": system_instruction},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=temperature,
     )
 
-    raw = response.text or ""
-    if _is_gemma(model):
-        raw = _strip_fences(raw)
+    raw = response.choices[0].message.content or ""
+    raw = _strip_fences(raw)
 
     try:
         parsed = json.loads(raw)
@@ -134,12 +126,12 @@ def generate_text(
     Used by dialogue.py for plain-English voice questions where JSON would be wrong.
     """
     model = _get_model()
-    response = client.models.generate_content(
+    response = client.chat.completions.create(
         model=model,
-        contents=user_prompt,
-        config=types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            temperature=temperature,
-        ),
+        messages=[
+            {"role": "system", "content": system_instruction},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=temperature,
     )
-    return (response.text or "").strip()
+    return (response.choices[0].message.content or "").strip()
