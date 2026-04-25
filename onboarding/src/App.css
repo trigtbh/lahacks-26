@@ -123,17 +123,34 @@ body::after {
 .page--welcome {
   flex: 1;
   display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  padding: 80px 64px;
+  align-items: stretch;
   background: #f2ece3;
+  position: relative;
+  overflow: hidden;
+  min-height: 100vh;
+}
+
+.welcome-inner {
+  flex: 0 0 auto;
+  width: 480px;
+  display: flex; flex-direction: column; gap: 28px;
+  padding: 80px 64px;
+  justify-content: center;
+}
+
+.welcome-chad {
+  flex: 1;
   position: relative;
   overflow: hidden;
 }
 
-.welcome-inner {
-  max-width: 560px; width: 100%;
-  display: flex; flex-direction: column; gap: 28px;
+.chad-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top center;
 }
 
 .welcome-brand {

@@ -108,6 +108,9 @@ function WelcomeStep({ userId, setUserId, onNext, theme }) {
         </div>
         <p className="hint">Select apps · Connect accounts · Start talking</p>
       </div>
+      <div className="welcome-chad">
+        <img src="/Chad.png" alt="Chad" className="chad-img" />
+      </div>
     </div>
   );
 }
