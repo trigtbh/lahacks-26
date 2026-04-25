@@ -12,10 +12,10 @@ from pydantic import BaseModel
 from elevenlabs.client import AsyncElevenLabs
 from dotenv import load_dotenv
 
+load_dotenv()
+
 from agentverse_client import find_agent, send_to_agent, start_gateway
 import session_store as sessions
-
-load_dotenv()
 
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
 ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")  # "George"
