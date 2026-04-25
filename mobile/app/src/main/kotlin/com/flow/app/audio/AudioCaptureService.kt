@@ -24,6 +24,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -47,6 +48,7 @@ class AudioCaptureService : Service() {
         private const val MIN_UTTERANCE_MS = 700L
         private const val PRE_ROLL_MS = 500L
         private const val LEVEL_REPORT_INTERVAL_MS = 600L
+        private const val POST_WORKFLOW_COOLDOWN_MS = 4000L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -55,6 +57,7 @@ class AudioCaptureService : Service() {
     private lateinit var apiClient: FlowApiClient
     private var loopJob: Job? = null
     private var inAgentSession = false
+    private var cooldownUntilMs = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -86,6 +89,11 @@ class AudioCaptureService : Service() {
 
     private suspend fun runLoop(userId: String) {
         while (currentCoroutineContext().isActive) {
+            val cooldownRemainingMs = cooldownUntilMs - System.currentTimeMillis()
+            if (cooldownRemainingMs > 0L) {
+                FluxEvents.emitDebugStatus("Workflow finished. Pausing before next listen...")
+                delay(cooldownRemainingMs)
+            }
             runSession(userId)
         }
     }
@@ -123,7 +131,7 @@ class AudioCaptureService : Service() {
 
                     if (now - lastLevelReportAt >= LEVEL_REPORT_INTERVAL_MS) {
                         FluxEvents.emitDebugStatus(
-                            "Listening locally for speech\nrms=${fmt(rms)} floor=${fmt(noiseFloor)} trigger=${fmt(speechThreshold)}"
+                            "Listening on glasses mic for speech\nrms=${fmt(rms)} floor=${fmt(noiseFloor)} trigger=${fmt(speechThreshold)}"
                         )
                         lastLevelReportAt = now
                     }
@@ -251,10 +259,22 @@ class AudioCaptureService : Service() {
     private suspend fun handleEndAudioResponse(userId: String, chunkId: String, resp: EndAudioResponse) {
         Log.d(
             "Flux/End",
-            "chunkId=$chunkId transcript=${resp.transcript} action=${resp.action} inSession=$inAgentSession"
+            "chunkId=$chunkId transcript=${resp.transcript} action=${resp.action} workflowStatus=${resp.workflowStatus} inSession=$inAgentSession"
         )
-        FluxEvents.emitSpeechCaptured(resp.transcript.ifBlank { "(empty transcript)" })
+
+        if (resp.transcript.isBlank() || resp.action == "ignored" || resp.workflowStatus == "ignored") {
+            FluxEvents.emitDebugStatus("Ignoring empty transcript for $chunkId")
+            return
+        }
+
+        FluxEvents.emitSpeechCaptured(resp.transcript)
         FluxEvents.emitDebugStatus("Backend responded for $chunkId with action=${resp.action}")
+
+        if (resp.workflowStatus == "created" || resp.workflowStatus == "executed") {
+            cooldownUntilMs = System.currentTimeMillis() + POST_WORKFLOW_COOLDOWN_MS
+            FluxEvents.emitDebugStatus(resp.workflowMessage.ifBlank { "Workflow finished. Cooling down..." })
+            TtsQueue.speak(resp.workflowMessage.ifBlank { "workflow ${resp.workflowStatus}" })
+        }
 
         if (inAgentSession) {
             apiClient.executeWorkflow(

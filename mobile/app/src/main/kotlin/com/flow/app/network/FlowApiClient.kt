@@ -21,6 +21,8 @@ data class EndAudioResponse(
     val command: String,
     val action: String,
     val agentName: String,
+    val workflowStatus: String,
+    val workflowMessage: String,
 )
 
 data class WorkflowRequest(
@@ -101,6 +103,8 @@ class FlowApiClient(baseUrl: String) {
                     command = res.optString("command", ""),
                     action = res.optString("action", "unknown"),
                     agentName = res.optString("agent_name", ""),
+                    workflowStatus = res.optString("workflow_status", ""),
+                    workflowMessage = res.optString("workflow_message", ""),
                 )
             }
         }

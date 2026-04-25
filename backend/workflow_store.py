@@ -16,12 +16,82 @@ All functions no-op gracefully when MONGO_ENABLED is false.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
+import re
 from typing import Any
 
+from ai.llm import generate_json
+from ai.prompts import TRIGGER_SYSTEM, build_trigger_match_prompt
 from db import db, MONGO_ENABLED
 
 _col = db["workflows"] if db is not None else None
+
+
+_PUNCT_RE = re.compile(r"[^\w\s]")
+
+
+def _normalize_trigger_text(value: str) -> str:
+    text = value.strip().lower()
+    text = text.replace("i'm", "i am")
+    text = text.replace("im", "i am")
+    text = text.replace("you're", "you are")
+    text = text.replace("we're", "we are")
+    text = text.replace("they're", "they are")
+    text = text.replace("can't", "cannot")
+    text = text.replace("won't", "will not")
+    text = text.replace("n't", " not")
+    text = text.replace("'re", " are")
+    text = text.replace("'ll", " will")
+    text = text.replace("'ve", " have")
+    text = text.replace("'d", " would")
+    text = _PUNCT_RE.sub(" ", text)
+    return " ".join(text.split())
+
+
+async def _semantic_match_trigger(
+    spoken: str,
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if not candidates:
+        return None
+
+    saved_triggers = [
+        candidate.get("trigger_phrase", "").strip()
+        for candidate in candidates
+        if candidate.get("trigger_phrase", "").strip()
+    ]
+    if not saved_triggers:
+        return None
+
+    try:
+        result = await asyncio.to_thread(
+            generate_json,
+            TRIGGER_SYSTEM,
+            build_trigger_match_prompt(spoken, saved_triggers),
+            0.0,
+        )
+    except Exception:
+        return None
+
+    if not result.get("matched"):
+        return None
+
+    matched_trigger = str(result.get("trigger_phrase") or "").strip()
+    if not matched_trigger:
+        return None
+
+    normalized_match = _normalize_trigger_text(matched_trigger)
+    for candidate in candidates:
+        stored = candidate.get("trigger_phrase", "").strip()
+        if not stored:
+            continue
+        if stored.lower() == matched_trigger.lower():
+            return candidate
+        if _normalize_trigger_text(stored) == normalized_match:
+            return candidate
+
+    return None
 
 
 async def save_workflow(
@@ -66,6 +136,7 @@ async def find_by_trigger(user_id: str, spoken: str) -> dict[str, Any] | None:
     if not MONGO_ENABLED or _col is None:
         return None
     spoken_stripped = spoken.strip()
+    normalized_spoken = _normalize_trigger_text(spoken_stripped)
 
     # 1. Exact
     doc = await _col.find_one({
@@ -75,14 +146,22 @@ async def find_by_trigger(user_id: str, spoken: str) -> dict[str, Any] | None:
     if doc:
         return doc
 
-    # 2. Stored trigger is a substring of what was spoken
-    cursor = _col.find({"user_id": user_id})
-    async for candidate in cursor:
+    # 2. Normalized / substring matching
+    candidates = await _col.find({"user_id": user_id}).to_list(length=200)
+    for candidate in candidates:
         stored = candidate.get("trigger_phrase", "")
+        normalized_stored = _normalize_trigger_text(stored)
         if stored.lower() in spoken_stripped.lower():
             return candidate
+        if normalized_stored and (
+            normalized_stored == normalized_spoken
+            or normalized_stored in normalized_spoken
+            or normalized_spoken in normalized_stored
+        ):
+            return candidate
 
-    return None
+    # 3. Semantic similarity fallback via the existing trigger-matching prompt.
+    return await _semantic_match_trigger(spoken_stripped, candidates)
 
 
 async def delete_workflow(workflow_id: str) -> bool:
