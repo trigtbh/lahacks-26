@@ -206,6 +206,69 @@ def _contains_workflow(transcript: str) -> bool:
     return "work flow" in transcript.lower()
 
 
+async def _create_workflow_from_transcript(user_id: str, transcript: str) -> dict:
+    logger.info("[audio/workflow] classifying transcript=%r user=%s", transcript, user_id)
+    try:
+        workflow = await asyncio.to_thread(classify, transcript)
+    except Exception as exc:
+        logger.error("[audio/workflow] classify failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=502, detail=f"Workflow classification failed: {exc}")
+
+    validation_errors = validate(workflow)
+    if validation_errors:
+        logger.warning("[audio/workflow] validation errors: %s", validation_errors)
+
+    trigger_phrase = workflow.get("trigger_phrase", "").strip()
+    steps = workflow.get("steps", [])
+    if not trigger_phrase:
+        raise HTTPException(status_code=422, detail="Classifier returned no trigger_phrase")
+    if not steps:
+        raise HTTPException(status_code=422, detail="Classifier returned no workflow steps")
+
+    existing_workflow = await workflow_store.find_by_trigger(user_id, trigger_phrase)
+    if existing_workflow:
+        logger.info("[audio/workflow] classifier trigger matched existing workflow trigger=%r user=%s",
+                    trigger_phrase, user_id)
+        return await _execute_saved_workflow(existing_workflow, user_id)
+
+    workflow_id = await workflow_store.save_workflow(
+        user_id=user_id,
+        trigger_phrase=trigger_phrase,
+        steps=steps,
+    )
+    logger.info("[audio/workflow] created id=%s trigger=%r user=%s",
+                workflow_id, trigger_phrase, user_id)
+
+    return {
+        "workflow_status": "created",
+        "workflow_message": "workflow created",
+        "workflow_id": workflow_id,
+        "workflow_trigger": trigger_phrase,
+        "workflow_schema": {
+            "trigger_phrase": trigger_phrase,
+            "steps": steps,
+            "missing_params": workflow.get("missing_params", []),
+            "confidence": workflow.get("confidence"),
+            "validation_errors": validation_errors,
+        },
+    }
+
+
+async def _execute_saved_workflow(doc: dict, user_id: str) -> dict:
+    workflow_id = str(doc.get("_id", ""))
+    logger.info("[audio/workflow] executing id=%s trigger=%r user=%s",
+                workflow_id, doc.get("trigger_phrase"), user_id)
+
+    result = await asyncio.to_thread(execute_workflow, doc["steps"])
+    return {
+        "workflow_status": "executed",
+        "workflow_message": "workflow executed",
+        "workflow_id": workflow_id,
+        "workflow_trigger": doc.get("trigger_phrase", ""),
+        "workflow_result": result,
+    }
+
+
 # ---------------------------------------------------------------------------
 # /audio/start  — open a new recording session
 # ---------------------------------------------------------------------------
@@ -297,14 +360,31 @@ async def audio_end(payload: AudioSessionRequest):
     action, agent_name = _classify_command(command)
     logger.info(f"[audio/end] command={command!r} action={action} agent_name={agent_name!r}")
 
-    return JSONResponse({
+    workflow_response = None
+    workflow_spoken_text = command.strip() or transcript.strip()
+    if workflow_spoken_text:
+        existing_workflow = await workflow_store.find_by_trigger(meta["user_id"], workflow_spoken_text)
+        if existing_workflow:
+            workflow_response = await _execute_saved_workflow(existing_workflow, meta["user_id"])
+            action = "workflow"
+            agent_name = ""
+        elif action == "workflow" or _contains_workflow(workflow_spoken_text):
+            workflow_response = await _create_workflow_from_transcript(meta["user_id"], workflow_spoken_text)
+            action = "workflow"
+            agent_name = ""
+
+    response = {
         "chunk_id": chunk_id,
         "user_id": meta["user_id"],
         "transcript": transcript,
         "command": command,
         "action": action,
         "agent_name": agent_name,
-    })
+    }
+    if workflow_response:
+        response.update(workflow_response)
+
+    return JSONResponse(response)
 
 
 # ---------------------------------------------------------------------------
