@@ -83,6 +83,7 @@ gateway = Agent(
     seed=os.environ.get("GATEWAY_SEED", "flux-gateway-seed-lahacks-26"),
     port=8001,
     endpoint=["http://localhost:8001/submit"],
+    loop=asyncio.new_event_loop(),
 )
 
 
