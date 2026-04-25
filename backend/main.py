@@ -46,7 +46,7 @@ NOTION_CLIENT_SECRET = os.environ.get("NOTION_CLIENT_SECRET", "")
 GOOGLE_CLIENT_ID     = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 BACKEND_URL          = os.environ.get("BACKEND_URL", "https://flux.trigtbh.dev")
-GOOGLE_REDIRECT_URI  = os.environ.get("GOOGLE_REDIRECT_URI", f"{BACKEND_URL}/auth/google/callback")
+GOOGLE_REDIRECT_URI  = os.environ.get("GOOGLE_REDIRECT_URI", f"{BACKEND_URL}/connect/google/redirect")
 
 
 def _load_google_client_config() -> tuple[str, dict]:
@@ -128,7 +128,7 @@ def _get_google_redirect_uri(request: Request | None = None) -> str:
         request_host = request.url.hostname or ""
         request_port = request.url.port or 8000
         if _GOOGLE_CLIENT_TYPE == "installed" and _is_private_non_loopback_host(request_host):
-            localhost_redirect = f"http://localhost:{request_port}/auth/google/callback"
+            localhost_redirect = f"http://localhost:{request_port}/connect/google/redirect"
             logger.info(
                 "[auth/google] using localhost redirect for installed client instead of private host=%s",
                 request_host,
@@ -138,7 +138,7 @@ def _get_google_redirect_uri(request: Request | None = None) -> str:
     if parsed_configured and _GOOGLE_CLIENT_TYPE == "installed":
         configured_host = parsed_configured.hostname or ""
         if _is_private_non_loopback_host(configured_host):
-            localhost_redirect = f"http://localhost:{parsed_configured.port or 8000}/auth/google/callback"
+            localhost_redirect = f"http://localhost:{parsed_configured.port or 8000}/connect/google/redirect"
             logger.info(
                 "[auth/google] overriding private redirect host=%s with localhost for installed client",
                 configured_host,
@@ -148,7 +148,7 @@ def _get_google_redirect_uri(request: Request | None = None) -> str:
     if configured_redirect:
         return configured_redirect
 
-    return f"{BACKEND_URL}/auth/google/callback"
+    return f"{BACKEND_URL}/connect/google/redirect"
 
 # ── Intent patterns ──────────────────────────────────────────────────────────
 
@@ -1275,7 +1275,7 @@ async def _handle_google_callback(code: str, state: str, request: Request):
     return HTMLResponse(_CONNECTED_HTML.format(service=connected_label))
 
 
-@app.get("/auth/google/callback")
+@app.get("/connect/google/redirect")
 async def auth_google_callback(code: str, state: str, request: Request):
     return await _handle_google_callback(code, state, request)
 
@@ -1293,13 +1293,13 @@ async def auth_slack(user_id: str):
         "client_id":    SLACK_CLIENT_ID,
         "scope":        "",
         "user_scope":   " ".join(_SLACK_USER_SCOPES),
-        "redirect_uri": f"{BACKEND_URL}/auth/slack/callback",
+        "redirect_uri": f"{BACKEND_URL}/connect/slack/redirect",
         "state":        user_id,
     }
     return RedirectResponse("https://slack.com/oauth/v2/authorize?" + urlencode(params))
 
 
-@app.get("/auth/slack/callback")
+@app.get("/connect/slack/redirect")
 async def auth_slack_callback(code: str, state: str):
     user_id = state
     async with httpx.AsyncClient() as client:
@@ -1309,7 +1309,7 @@ async def auth_slack_callback(code: str, state: str):
                 "client_id":     SLACK_CLIENT_ID,
                 "client_secret": SLACK_CLIENT_SECRET,
                 "code":          code,
-                "redirect_uri":  f"{BACKEND_URL}/auth/slack/callback",
+                "redirect_uri":  f"{BACKEND_URL}/connect/slack/redirect",
             },
         )
     data = resp.json()
@@ -1333,13 +1333,13 @@ async def auth_notion(user_id: str):
         "client_id":     NOTION_CLIENT_ID,
         "response_type": "code",
         "owner":         "user",
-        "redirect_uri":  f"{BACKEND_URL}/auth/notion/callback",
+        "redirect_uri":  f"{BACKEND_URL}/connect/notion/redirect",
         "state":         user_id,
     }
     return RedirectResponse("https://api.notion.com/v1/oauth/authorize?" + urlencode(params))
 
 
-@app.get("/auth/notion/callback")
+@app.get("/connect/notion/redirect")
 async def auth_notion_callback(code: str, state: str):
     user_id = state
     credentials = base64.b64encode(f"{NOTION_CLIENT_ID}:{NOTION_CLIENT_SECRET}".encode()).decode()
@@ -1347,7 +1347,7 @@ async def auth_notion_callback(code: str, state: str):
         resp = await client.post(
             "https://api.notion.com/v1/oauth/token",
             headers={"Authorization": f"Basic {credentials}", "Content-Type": "application/json"},
-            json={"grant_type": "authorization_code", "code": code, "redirect_uri": f"{BACKEND_URL}/auth/notion/callback"},
+            json={"grant_type": "authorization_code", "code": code, "redirect_uri": f"{BACKEND_URL}/connect/notion/redirect"},
         )
     data = resp.json()
     if "access_token" not in data:
