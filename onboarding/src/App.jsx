@@ -26,7 +26,7 @@ const AUTH_GROUPS = {
 // ── Theme ─────────────────────────────────────────────────────────────────────
 
 const DEFAULT_THEME = {
-  appName:"idontwannado", tagline:"Voice automations for Ray-Ban glasses.",
+  appName:"idlemax.ing", tagline:"Voice automations for Ray-Ban glasses.",
   accentColor:"#ffffff", bgColor:"#080808", cardBg:"#111111",
   borderColor:"#1e1e1e", successColor:"#4ade80", mutedColor:"#555555",
 };
