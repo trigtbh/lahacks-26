@@ -97,7 +97,8 @@ async def lifespan(app: FastAPI):
     start_gateway()
     yield
 
-_BASE_DIR = Path(__file__).parent / "static" / "onboarding"
+_BASE_DIR       = Path(__file__).parent
+_ONBOARDING_DIR = _BASE_DIR / "static" / "onboarding"
 
 app = FastAPI(lifespan=lifespan)
 
@@ -108,7 +109,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_ONBOARDING_DIR = _BASE_DIR / "static" / "onboarding"
 if _ONBOARDING_DIR.exists():
     app.mount("/setup", StaticFiles(directory=_ONBOARDING_DIR, html=True), name="onboarding")
 
