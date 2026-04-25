@@ -274,6 +274,42 @@ _SLACK_ACTIONS = {"send_dm", "send_channel"}
 # Public API
 # ─────────────────────────────────────────────
 
+async def execute_workflow_stream(user_id: str, steps: list[dict[str, Any]]):
+    """Async generator that yields SSE-ready dicts for each step as it runs."""
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as fallback_client:
+        for i, step in enumerate(steps):
+            app    = step.get("app", "")
+            action = step.get("action", "")
+            label  = f"{app}.{action}"
+            resolved: dict = {}
+
+            yield {"type": "step_start", "index": i, "label": label}
+
+            try:
+                resolved = await _resolve_params(user_id, step.get("params", {}))
+
+                handler = _OAUTH_HANDLERS.get((app, action))
+                if handler:
+                    await handler(user_id, resolved)
+                elif app == "slack" and action in _SLACK_ACTIONS:
+                    await _slack_send(user_id, resolved, action)
+                else:
+                    webhook_url = await zapier_store.get_webhook_url(user_id, app, action)
+                    if not webhook_url:
+                        raise ValueError(f"No handler or Zapier webhook configured for {label}")
+                    resp = await fallback_client.post(webhook_url, json=resolved)
+                    resp.raise_for_status()
+                    log.info("Zapier webhook fired for %s → HTTP %s", label, resp.status_code)
+
+                yield {"type": "step_done", "index": i, "params": resolved}
+
+            except Exception as exc:
+                log.error("%s failed: %s", label, exc, exc_info=True)
+                yield {"type": "step_error", "index": i, "error": str(exc)}
+
+    yield {"type": "done"}
+
+
 async def execute_workflow(user_id: str, steps: list[dict[str, Any]]) -> dict[str, Any]:
     completed: list[dict] = []
     failed:    list[dict] = []

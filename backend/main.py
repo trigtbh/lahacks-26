@@ -12,7 +12,7 @@ from urllib.parse import urlencode
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -28,7 +28,7 @@ import asyncio
 import workflow_store
 import zapier_store
 import token_store
-from executor import execute_workflow
+from executor import execute_workflow, execute_workflow_stream
 from ai.classifier import classify
 from ai.validator import validate
 
@@ -693,6 +693,62 @@ async def delete_user_webhook(user_id: str, app: str, action: str):
     """Remove a webhook for a specific app+action."""
     deleted = await zapier_store.delete_webhook(user_id, app, action)
     return {"deleted": deleted}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TEXT RUNNER ENDPOINTS  (/run page + preview + execute-stream)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/run", response_class=HTMLResponse)
+async def run_page():
+    """Serve the interactive workflow runner UI."""
+    html_path = _BASE_DIR / "run_page.html"
+    return HTMLResponse(html_path.read_text())
+
+
+class WorkflowPreviewRequest(BaseModel):
+    user_id: str
+    prompt:  str
+
+
+@app.post("/workflow/preview")
+async def workflow_preview(payload: WorkflowPreviewRequest):
+    """Classify a prompt → workflow JSON (no persistence). Used by /run page."""
+    logger.info("[workflow/preview] user=%s prompt=%r", payload.user_id, payload.prompt)
+    try:
+        workflow = await asyncio.to_thread(classify, payload.prompt)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Classification failed: {exc}")
+
+    errors = validate(workflow)
+    return {
+        "trigger_phrase":    workflow.get("trigger_phrase", ""),
+        "steps":             workflow.get("steps", []),
+        "missing_params":    workflow.get("missing_params", []),
+        "confidence":        workflow.get("confidence"),
+        "validation_errors": errors,
+    }
+
+
+class WorkflowExecuteStreamRequest(BaseModel):
+    user_id: str
+    steps:   list
+
+
+@app.post("/workflow/execute-stream")
+async def workflow_execute_stream(payload: WorkflowExecuteStreamRequest):
+    """Execute workflow steps one-by-one, streaming SSE events per step."""
+    import json
+
+    async def event_stream():
+        async for event in execute_workflow_stream(payload.user_id, payload.steps):
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
