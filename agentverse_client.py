@@ -163,7 +163,7 @@ async def send_to_agent(
 
 KNOWN_AGENTS: dict[str, tuple[str, str]] = {
     # "spoken name": ("agent1q...", "Display Name")
-    # e.g. "caltrain": ("agent1q<your_address>", "Caltrain"),
+    "caltrain": ("agent1qdxz2kgv8xfdlau4z5hy6zyzxtxxfdz7rl8jvz5nypyj7fkpjnguj2pfpuz", "Caltrain"),
 }
 
 

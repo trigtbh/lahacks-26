@@ -51,6 +51,9 @@ STOP_CODES = {
 
 agent = Agent(
     name="caltrain",
+    seed=os.environ.get("CALTRAIN_SEED", "caltrain-agent-lahacks-26-fixed-seed"),
+    port=8010,
+    endpoint=["http://localhost:8010/submit"],
     readme="""
 ## Caltrain Schedule Agent
 Ask me about upcoming Caltrain departures, schedules, and service status.
