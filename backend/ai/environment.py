@@ -420,6 +420,10 @@ RULES:
 4. Return ONLY valid JSON. No markdown, no explanation, no code fences.
 5. If you cannot resolve a param, add it to missing_params as a plain English description.
 6. Confidence should reflect how well you understood the user's intent (0.0-1.0).{denial_rule}
+7. NEVER hardcode or assume dates, times, or timestamps. You do not know what time it is.
+   Whenever a step needs the current date or time, you MUST first emit an innate.get_datetime
+   step with an output_key, then reference that output in later steps via context.<key>.
+   Hardcoding any date string (e.g. "2024-01-01", "today", "now") is forbidden.
 
 ALLOWED APPS AND ACTIONS:
 {apps_block}
@@ -432,6 +436,11 @@ DATA FLOW:
   Reference stored values in later steps using "context.<identifier>" or "context.<identifier>.<field>".
   Example: {{"app": "gmail", "action": "search_email", "params": {{}}, "output_key": "emails"}}
            {{"app": "innate", "action": "count", "params": {{"items": "context.emails"}}, "output_key": "email_count"}}
+
+DATE/TIME PATTERN (always use this when the current date or time is needed):
+  Step 1: {{"app": "innate", "action": "get_datetime", "params": {{"format": "iso"}}, "output_key": "now"}}
+  Step 2: use "context.now" wherever the timestamp is needed as a param value.
+  Never skip step 1 and never substitute a hardcoded date string for "context.now".
 
 CONTROL FLOW SYNTAX:
   control.if:

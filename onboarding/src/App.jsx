@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import "./App.css";
 
-const API_BASE = "http://149.248.10.229:8000";
+const API_BASE = "";
 
 // ── App catalogue ─────────────────────────────────────────────────────────────
 

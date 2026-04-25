@@ -20,6 +20,17 @@ _VALID_INTENTS = {"create_workflow", "trigger_workflow", "other", "denied"}
 
 _OUTPUT_KEY_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
 
+# Matches ISO-style dates/times or English words that indicate a hardcoded timestamp.
+# We flag these so Gemma is forced to use innate.get_datetime instead.
+_HARDCODED_DATE_RE = re.compile(
+    r"""
+    \b\d{4}-\d{2}-\d{2}          # ISO date: 2024-01-15
+    | \b\d{4}-\d{2}-\d{2}T\d{2}  # ISO datetime: 2024-01-15T09
+    | \btoday\b | \bnow\b | \btomorrow\b | \byesterday\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
 # Heuristic: does this string LOOK like it was meant to be a resolver?
 # Matches dotted lowercase identifiers, optionally with `:` or `+` template suffix.
 # - calendar.next_event.attendees           ✓
@@ -201,6 +212,14 @@ def _check_steps(workflow_or_steps, errors: list[str], allowed_actions: dict) ->
                         f"{prefix}: param '{pname}' value '{pvalue}' "
                         f"looks like a resolver but is not a known resolver key"
                     )
+            # Hardcoded dates/times are forbidden — the workflow must use
+            # innate.get_datetime (output_key) + context.<key> instead.
+            if isinstance(pvalue, str) and _HARDCODED_DATE_RE.search(pvalue):
+                errors.append(
+                    f"{prefix}: param '{pname}' contains a hardcoded date/time "
+                    f"({pvalue!r}). Use innate.get_datetime with output_key and "
+                    f"reference the result via context.<key> instead."
+                )
 
 
 def _looks_like_resolver(value: str) -> bool:

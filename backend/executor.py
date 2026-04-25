@@ -20,12 +20,23 @@ import token_store
 import zapier_store
 import google_people
 from google_auth import get_google_creds
-from innate_executor import execute_innate
+from innate_executor import execute_innate, _HANDLERS as _INNATE_HANDLERS
 from ai.condition_eval import evaluate_condition
+from ai.environment import ALLOWED_ACTIONS
 
 log = logging.getLogger(__name__)
 
 _TIMEOUT = 10.0
+
+# Set of valid innate action names for fast membership checks.
+_INNATE_ACTION_NAMES: frozenset[str] = frozenset(_INNATE_HANDLERS.keys())
+
+# Map action name → correct app for common Gemma misroutings (e.g. innate.create_document).
+_INNATE_REMAP: dict[str, str] = {
+    action: app
+    for app, actions in ALLOWED_ACTIONS.items()
+    for action in actions
+}
 
 
 # ─────────────────────────────────────────────
@@ -548,6 +559,19 @@ async def _execute_steps(
 
             # ── Resolve params (with context support) ─────────────────────
             resolved = await _resolve_params(user_id, step.get("params", {}), context)
+
+            # ── Remap misrouted innate steps ──────────────────────────────
+            # Gemma sometimes hallucinates innate.<action> when the action
+            # belongs to a real app (e.g. innate.create_document → google_drive).
+            if app == "innate" and action not in _INNATE_ACTION_NAMES:
+                remapped = _INNATE_REMAP.get(action)
+                if remapped:
+                    log.warning(
+                        "remapping hallucinated innate.%s → %s.%s",
+                        action, remapped, action,
+                    )
+                    app = remapped
+                    label = f"{app}.{action}"
 
             # ── Innate actions ────────────────────────────────────────────
             if app == "innate":

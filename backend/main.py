@@ -1,4 +1,7 @@
+import os
+from pathlib import Path
 from dotenv import load_dotenv
+load_dotenv(Path(__file__).parent / ".env")
 import difflib
 import ipaddress
 import json
@@ -34,6 +37,7 @@ from ai.classifier import classify, classify_for_user
 from ai.validator import validate
 
 SLACK_CLIENT_ID      = os.environ.get("SLACK_CLIENT_ID", "")
+print(f"SLACK_CLIENT_ID: {SLACK_CLIENT_ID}")
 SLACK_CLIENT_SECRET  = os.environ.get("SLACK_CLIENT_SECRET", "")
 GOOGLE_CLIENT_ID     = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
