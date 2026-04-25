@@ -11,7 +11,10 @@
       "Bash(grep -v \"PermissionStatus\\\\|import\\\\|//\")",
       "WebFetch(domain:uagents.fetch.ai)",
       "WebFetch(domain:docs.asi1.ai)",
-      "WebFetch(domain:innovationlab.fetch.ai)"
+      "WebFetch(domain:innovationlab.fetch.ai)",
+      "Bash(git checkout *)",
+      "Bash(git merge *)",
+      "Bash(git fetch *)"
     ]
   }
 }
