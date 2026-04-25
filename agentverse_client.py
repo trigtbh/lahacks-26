@@ -139,7 +139,7 @@ async def send_to_agent(
     agent_address: str,
     message: str,
     user_id: str,
-    timeout: float = 15.0,
+    timeout: float = 30.0,
 ) -> str:
     """
     Enqueue a message for an agent and await the reply.

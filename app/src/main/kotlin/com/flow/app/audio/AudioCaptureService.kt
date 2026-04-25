@@ -32,6 +32,7 @@ class AudioCaptureService : Service() {
     private val audioCaptureManager = AudioCaptureManager()
     private lateinit var apiClient: FlowApiClient
     private var loopJob: Job? = null
+    private var inAgentSession = false
 
     override fun onCreate() {
         super.onCreate()
@@ -90,7 +91,28 @@ class AudioCaptureService : Service() {
         if (hadSpeech) {
             withContext(NonCancellable) {
                 apiClient.endAudio(chunkId, userId).onSuccess { resp ->
-                    Log.d("Flux/End", "transcript=${resp.transcript} action=${resp.action}")
+                    Log.d("Flux/End", "transcript=${resp.transcript} action=${resp.action} inSession=$inAgentSession")
+
+                    if (inAgentSession) {
+                        // Forward directly to active agent — no command classification needed
+                        apiClient.executeWorkflow(
+                            WorkflowRequest(
+                                triggerPhrase = resp.transcript,
+                                userId = userId,
+                                context = mapOf("source" to "glasses_mic", "chunk_id" to chunkId),
+                            )
+                        ).onSuccess { wf ->
+                            Log.d("Flux/Agent", "actionTaken=${wf.actionTaken} reply=${wf.reply}")
+                            if (wf.actionTaken == "disconnect") {
+                                inAgentSession = false
+                                FluxEvents.emitSessionEnded()
+                            }
+                            val pcm = wf.audioB64?.let { Base64.decode(it, Base64.DEFAULT) }
+                            if (pcm != null) TtsQueue.playPcm(pcm)
+                        }
+                        return@onSuccess
+                    }
+
                     when (resp.action) {
                         "workflow" -> {
                             FluxEvents.emitTrigger(resp.transcript)
@@ -106,6 +128,7 @@ class AudioCaptureService : Service() {
                                     context = mapOf("source" to "glasses_mic", "chunk_id" to chunkId),
                                 )
                             ).onSuccess { wf ->
+                                if (wf.actionTaken == "connect") inAgentSession = true
                                 val pcm = wf.audioB64?.let { Base64.decode(it, Base64.DEFAULT) }
                                 if (pcm != null) TtsQueue.playPcm(pcm)
                             }
@@ -121,6 +144,7 @@ class AudioCaptureService : Service() {
                                     context = mapOf("source" to "glasses_mic", "chunk_id" to chunkId),
                                 )
                             ).onSuccess { wf ->
+                                if (wf.actionTaken == "connect") inAgentSession = true
                                 val pcm = wf.audioB64?.let { Base64.decode(it, Base64.DEFAULT) }
                                 if (pcm != null) TtsQueue.playPcm(pcm)
                             }
