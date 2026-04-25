@@ -349,9 +349,10 @@ body::after {
   transition: opacity 0.25s; pointer-events: none;
 }
 
-.tile-top { display: flex; align-items: flex-start; justify-content: space-between; }
+.tile-top { display: flex; align-items: flex-end; justify-content: space-between; height: 46px; }
 
 .tile-icon { width: 34px; height: 34px; object-fit: contain; }
+.tile-icon--lg { width: 46px; height: 46px; }
 
 .tile-check {
   width: 20px; height: 20px; border-radius: 50%;
@@ -491,6 +492,14 @@ body::after {
 .badge--ok { color: var(--success); background: color-mix(in srgb, var(--success) 10%, transparent); }
 
 .webhook-row { display: flex; gap: 8px; align-items: center; flex-shrink: 0; max-width: 280px; }
+
+.connect-card--col { flex-direction: column; align-items: stretch; }
+.connect-card--col .cc-left { width: 100%; }
+
+.cred-form { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.cred-form .btn-save { align-self: flex-end; }
+.cred-row { display: flex; gap: 8px; }
+.cred-row .text-input { flex: 1; min-width: 0; }
 
 .connect-footer {
   display: flex; align-items: center; justify-content: space-between;

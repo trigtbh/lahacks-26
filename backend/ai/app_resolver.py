@@ -44,4 +44,8 @@ async def get_available_apps(user_id: str) -> set[str]:
         if app:
             available.add(app)
 
+    # Credential-backed services
+    if "dominos" in connections:
+        available.add("dominos")
+
     return available

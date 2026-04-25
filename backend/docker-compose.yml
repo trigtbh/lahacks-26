@@ -10,7 +10,18 @@ services:
       - .env
     environment:
       - PYTHONUNBUFFERED=1
+      - DOMINOS_SERVICE_URL=http://dominos:3001
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    networks:
+      - proxy
+    depends_on:
+      - dominos
+
+  dominos:
+    container_name: dominos_service
+    build: ./dominos_service
+    ports:
+      - "3001:3001"
     networks:
       - proxy
 networks:
