@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import "./App.css";
 
-const API_BASE = "http://149.248.10.229:8000";
+const API_BASE = "";
 
 // ── App catalogue ─────────────────────────────────────────────────────────────
 
@@ -9,11 +9,11 @@ const APPS = [
   { id:"gmail",   group:"google", category:"Productivity", label:"Gmail",     desc:"Send & draft emails",          icon:"https://upload.wikimedia.org/wikipedia/commons/7/7e/Gmail_icon_%282020%29.svg",                                                             color:"#EA4335", auth:"google" },
   { id:"gcal",    group:"google", category:"Productivity", label:"Calendar",  desc:"Create, push & cancel events", icon:"https://upload.wikimedia.org/wikipedia/commons/a/a5/Google_Calendar_icon_%282020%29.svg",                                                   color:"#4285F4", auth:"google" },
   { id:"slack",   group:"slack",  category:"Communication",label:"Slack",     desc:"Message channels & DMs",       icon:"https://upload.wikimedia.org/wikipedia/commons/d/d5/Slack_icon_2019.svg",                                                                    color:"#E01E5A", auth:"slack"  },
-  { id:"notion",  group:"zapier", category:"Productivity", label:"Notion",    desc:"Create & append to pages",     icon:"https://upload.wikimedia.org/wikipedia/commons/4/45/Notion_app_logo.png",                                                                    color:"#ffffff", auth:"zapier" },
+  { id:"notion",  group:"notion", category:"Productivity", label:"Notion",    desc:"Create & append to pages",     icon:"https://upload.wikimedia.org/wikipedia/commons/4/45/Notion_app_logo.png",                                                                    color:"#000000", auth:"notion" },
   { id:"github",  group:"zapier", category:"Dev",          label:"GitHub",    desc:"Open & comment on issues",     icon:"https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",                                                                   color:"#f0f0f0", auth:"zapier" },
   { id:"spotify", group:"zapier", category:"Entertainment",label:"Spotify",   desc:"Play, pause & control music",  icon:"https://upload.wikimedia.org/wikipedia/commons/1/19/Spotify_logo_without_text.svg",                                                          color:"#1DB954", auth:"zapier" },
   { id:"uber",    group:"zapier", category:"Transport",    label:"Uber",      desc:"Request rides by voice",       icon:"https://upload.wikimedia.org/wikipedia/commons/c/cc/Uber_logo_2018.png",                                                                     color:"#ffffff", auth:"zapier" },
-  { id:"dominos", group:"zapier", category:"Food",         label:"Domino's",  desc:"Order & reorder pizza",        icon:"https://upload.wikimedia.org/wikipedia/commons/3/3b/Domino%27s_pizza_logo.svg",                                                             color:"#006491", auth:"zapier" },
+  { id:"dominos", group:"dominos", category:"Food",         label:"Domino's",  desc:"Order & reorder pizza",        icon:"/dominos.svg",                                                                                                                          color:"#006491", auth:"dominos" },
 ];
 
 const CATEGORIES = ["All", ...new Set(APPS.map(a => a.category))];
@@ -21,12 +21,13 @@ const CATEGORIES = ["All", ...new Set(APPS.map(a => a.category))];
 const AUTH_GROUPS = {
   google: { label:"Google", icon:"https://upload.wikimedia.org/wikipedia/commons/c/c1/Google_%22G%22_logo.svg", authUrl: uid => `${API_BASE}/auth/google?user_id=${uid}` },
   slack:  { label:"Slack",  icon:"https://upload.wikimedia.org/wikipedia/commons/d/d5/Slack_icon_2019.svg",    authUrl: uid => `${API_BASE}/auth/slack?user_id=${uid}`  },
+  notion: { label:"Notion", icon:"https://upload.wikimedia.org/wikipedia/commons/4/45/Notion_app_logo.png",   authUrl: uid => `${API_BASE}/auth/notion?user_id=${uid}` },
 };
 
 // ── Theme ─────────────────────────────────────────────────────────────────────
 
 const DEFAULT_THEME = {
-  appName:"idlemax.ing", tagline:"Voice automations for Ray-Ban glasses.",
+  appName:"idlemaxing", tagline:"Voice automations for Ray-Ban glasses.",
   accentColor:"#ffffff", bgColor:"#080808", cardBg:"#111111",
   borderColor:"#1e1e1e", successColor:"#4ade80", mutedColor:"#555555",
 };
@@ -89,10 +90,9 @@ function WelcomeStep({ userId, setUserId, onNext, theme }) {
     <div className="page page--welcome">
       <div className="welcome-inner">
         <div className="welcome-brand">{theme.appName}</div>
-        <div className="welcome-divider" />
         <h1 className="hero-title">
           Stop doing<br />
-          <span className="hero-accent">things yourself.</span>
+          <span className="hero-accent">things yourself</span>
         </h1>
         <p className="hero-sub">{theme.tagline}</p>
         <div className="welcome-form">
@@ -106,7 +106,6 @@ function WelcomeStep({ userId, setUserId, onNext, theme }) {
             Get started <span className="arr">→</span>
           </button>
         </div>
-        <p className="hint">Select apps · Connect accounts · Start talking</p>
       </div>
       <div className="welcome-chad">
         <img src="/Chad.png" alt="Chad" className="chad-img" />
@@ -148,7 +147,7 @@ function SelectStep({ selected, setSelected, onNext }) {
               onClick={() => toggle(app.id)} style={{ "--app-color": app.color, animationDelay:`${i*30}ms` }}>
               <div className="tile-glow" />
               <div className="tile-top">
-                <img src={app.icon} alt={app.label} className="tile-icon" onError={e => e.target.style.opacity=0} />
+                <img src={app.icon} alt={app.label} className={`tile-icon${app.id === "dominos" ? " tile-icon--lg" : ""}`} onError={e => e.target.style.opacity=0} />
                 <div className={`tile-check ${sel?"tile-check--visible":""}`}>✓</div>
               </div>
               <div className="tile-name">{app.label}</div>
@@ -171,16 +170,76 @@ function SelectStep({ selected, setSelected, onNext }) {
   );
 }
 
-function ConnectStep({ selected, userId, connected, onRefresh, onDone }) {
+function DominosCredForm({ appId, userId, onSaved }) {
+  const [fields, setFields] = useState({
+    firstName: "", lastName: "", email: "", phone: "", address: "",
+    cardNumber: "", cardExpiration: "", cardCvv: "", cardZip: "",
+  });
+  const [saving, setSaving] = useState(false);
+
+  const set = k => e => setFields(p => ({ ...p, [k]: e.target.value }));
+  const canSave = fields.firstName.trim() && fields.address.trim() && fields.phone.trim();
+
+  async function submit() {
+    if (!canSave) return;
+    setSaving(true);
+    try {
+      await fetch(`${API_BASE}/user/${userId}/credentials/dominos`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(fields),
+      });
+      onSaved(appId);
+    } catch (_) {}
+    setSaving(false);
+  }
+
+  return (
+    <div className="cred-form">
+      <div className="cred-section-label">Delivery info</div>
+      <div className="cred-row">
+        <input className="text-input text-input--xs" placeholder="First name *"
+          value={fields.firstName} onChange={set("firstName")} />
+        <input className="text-input text-input--xs" placeholder="Last name"
+          value={fields.lastName} onChange={set("lastName")} />
+      </div>
+      <input className="text-input text-input--xs" placeholder="Email"
+        value={fields.email} onChange={set("email")} />
+      <input className="text-input text-input--xs" placeholder="Phone *"
+        value={fields.phone} onChange={set("phone")} />
+      <input className="text-input text-input--xs" placeholder="Delivery address *"
+        value={fields.address} onChange={set("address")} />
+
+      <div className="cred-section-label" style={{marginTop:4}}>Payment (optional — needed to place orders)</div>
+      <input className="text-input text-input--xs" placeholder="Card number"
+        value={fields.cardNumber} onChange={set("cardNumber")} />
+      <div className="cred-row">
+        <input className="text-input text-input--xs" placeholder="MM/YY"
+          value={fields.cardExpiration} onChange={set("cardExpiration")} />
+        <input className="text-input text-input--xs" placeholder="CVV"
+          value={fields.cardCvv} onChange={set("cardCvv")} />
+        <input className="text-input text-input--xs" placeholder="ZIP"
+          value={fields.cardZip} onChange={set("cardZip")} />
+      </div>
+
+      <button className="btn-save" disabled={!canSave || saving} onClick={submit}>
+        {saving ? "Saving…" : "Save"}
+      </button>
+    </div>
+  );
+}
+
+function ConnectStep({ selected, userId, connected, onRefresh, onDone, onBack }) {
   const popupRef = useRef(null);
   const [webhooks, setWebhooks] = useState({});
   const [saved, setSaved]       = useState(new Set());
   const [saving, setSaving]     = useState(false);
 
   const neededGroups = [...new Set(
-    APPS.filter(a => selected.has(a.id) && a.auth !== "zapier").map(a => a.auth)
+    APPS.filter(a => selected.has(a.id) && !["zapier","dominos"].includes(a.auth)).map(a => a.auth)
   )];
-  const zapierApps = APPS.filter(a => selected.has(a.id) && a.auth === "zapier");
+  const zapierApps  = APPS.filter(a => selected.has(a.id) && a.auth === "zapier");
+  const dominosApps = APPS.filter(a => selected.has(a.id) && a.auth === "dominos");
 
   function openOAuth(group) {
     popupRef.current = window.open(AUTH_GROUPS[group].authUrl(userId), "oauth", "width=520,height=680");
@@ -252,10 +311,27 @@ function ConnectStep({ selected, userId, connected, onRefresh, onDone }) {
             }
           </div>
         ))}
+
+        {dominosApps.map(app => (
+          <div key={app.id} className={`connect-card connect-card--col ${saved.has(app.id)?"connect-card--done":""}`}>
+            <div className="cc-left">
+              <img src={app.icon} alt={app.label} className="cc-icon" onError={e=>e.target.style.opacity=0} />
+              <div>
+                <div className="cc-label">{app.label}</div>
+                <div className="cc-apps">Domino's account</div>
+              </div>
+              {saved.has(app.id) && <span className="badge badge--ok" style={{marginLeft:"auto"}}>✓ Saved</span>}
+            </div>
+            {!saved.has(app.id) && (
+              <DominosCredForm appId={app.id} userId={userId}
+                onSaved={id => setSaved(prev => new Set([...prev, id]))} />
+            )}
+          </div>
+        ))}
       </div>
 
       <div className="connect-footer">
-        <button className="btn-ghost-sm" onClick={onDone}>Skip remaining</button>
+        <button className="btn-back" onClick={onBack}>← Back</button>
         <button className="btn-primary btn-inline" onClick={onDone}>
           Finish <span className="arr">→</span>
         </button>
@@ -349,34 +425,10 @@ function ThemePanel({ theme, setTheme, onClose }) {
 
 // ── Top bar ───────────────────────────────────────────────────────────────────
 
-function TopBar({ step, theme }) {
-  const steps = [
-    { id:"select",  label:"Select" },
-    { id:"connect", label:"Connect" },
-  ];
-  const ORDER = ["welcome","select","connect","done"];
-  const cur = ORDER.indexOf(step);
-
+function TopBar({ theme }) {
   return (
     <div className="top-bar">
-      <div className="top-brand">
-        <span className="brand-mark sm">◈</span>
-        <span>{theme.appName}</span>
-      </div>
-      <div className="step-track">
-        {steps.map((s, i) => {
-          const idx = i + 1;
-          const done   = cur > idx;
-          const active = cur === idx;
-          return (
-            <div key={s.id} className={`step-pill ${active?"step-pill--active":""} ${done?"step-pill--done":""}`}>
-              <span className="pill-num">{done ? "✓" : idx}</span>
-              {s.label}
-            </div>
-          );
-        })}
-      </div>
-      <div style={{width:80}} />
+      <div className="top-brand">{theme.appName}</div>
     </div>
   );
 }
@@ -397,12 +449,12 @@ export default function App() {
 
   return (
     <>
-      <div className="shell">
-        {step !== "welcome" && step !== "done" && <TopBar step={step} theme={theme} />}
+      <div className={`shell${step === "select" || step === "connect" ? " shell--light" : ""}`}>
+        {step !== "welcome" && step !== "done" && <TopBar theme={theme} />}
 
         {step==="welcome" && <WelcomeStep userId={userId} setUserId={setUserId} onNext={next} theme={theme} />}
         {step==="select"  && <SelectStep  selected={selected} setSelected={setSelected} onNext={next} />}
-        {step==="connect" && <ConnectStep selected={selected} userId={userId} connected={connected} onRefresh={refresh} onDone={next} />}
+        {step==="connect" && <ConnectStep selected={selected} userId={userId} connected={connected} onRefresh={refresh} onDone={next} onBack={() => setStep("select")} />}
         {step==="done"    && <DoneStep    selected={selected} theme={theme} />}
       </div>
 

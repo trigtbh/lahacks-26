@@ -5,7 +5,7 @@ This is the only file you edit when tuning AI behaviour.
 classifier.py, dialogue.py, validator.py all import from here.
 """
 
-from ai.environment import build_system_prompt, RESOLVERS, ALLOWED_ACTIONS
+from ai.environment import build_system_prompt, RESOLVERS, ALLOWED_ACTIONS, INNATE_ACTIONS, CONTROL_ACTIONS
 
 
 # ─────────────────────────────────────────────
@@ -14,6 +14,13 @@ from ai.environment import build_system_prompt, RESOLVERS, ALLOWED_ACTIONS
 # ─────────────────────────────────────────────
 
 CLASSIFIER_SYSTEM = build_system_prompt()
+
+
+async def build_filtered_system_prompt(user_id: str) -> str:
+    """Build a system prompt filtered to only the apps this user has connected."""
+    from ai.app_resolver import get_available_apps
+    available = await get_available_apps(user_id)
+    return build_system_prompt(allowed_apps=available)
 
 
 def build_classifier_user_prompt(transcript: str) -> str:
@@ -85,7 +92,7 @@ Return ONLY the corrected JSON. No explanation."""
 
 
 def build_validator_repair_prompt(workflow_json: dict, errors: list[str]) -> str:
-    allowed_apps = list(ALLOWED_ACTIONS.keys())
+    allowed_apps = list({**ALLOWED_ACTIONS, "innate": INNATE_ACTIONS, "control": CONTROL_ACTIONS}.keys())
     resolver_keys = list(RESOLVERS.keys())
     return f"""This workflow JSON has errors:
 

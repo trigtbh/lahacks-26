@@ -1,5 +1,7 @@
+import os
+from pathlib import Path
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(Path(__file__).parent / ".env")
 import difflib
 import ipaddress
 import json
@@ -33,11 +35,14 @@ import workflow_store
 import zapier_store
 import token_store
 from executor import execute_workflow, execute_workflow_stream, preview_workflow
-from ai.classifier import classify
+from ai.classifier import classify, classify_for_user
 from ai.validator import validate
 
 SLACK_CLIENT_ID      = os.environ.get("SLACK_CLIENT_ID", "")
+print(f"SLACK_CLIENT_ID: {SLACK_CLIENT_ID}")
 SLACK_CLIENT_SECRET  = os.environ.get("SLACK_CLIENT_SECRET", "")
+NOTION_CLIENT_ID     = os.environ.get("NOTION_CLIENT_ID", "")
+NOTION_CLIENT_SECRET = os.environ.get("NOTION_CLIENT_SECRET", "")
 GOOGLE_CLIENT_ID     = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 BACKEND_URL          = os.environ.get("BACKEND_URL", "http://149.248.10.229:8000")
@@ -70,6 +75,7 @@ _GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/calendar",
     "https://www.googleapis.com/auth/contacts.readonly",
+    "https://www.googleapis.com/auth/drive",
     "openid",
     "email",
 ]
@@ -399,10 +405,15 @@ def _build_confirmation_prompt(kind: str, workflow_trigger: str, preview: dict) 
 async def _classify_workflow_request(user_id: str, transcript: str) -> tuple[dict, list[str]]:
     logger.info("[audio/workflow] classifying transcript=%r user=%s", transcript, user_id)
     try:
-        workflow = await asyncio.to_thread(classify, transcript)
+        workflow = await classify_for_user(transcript, user_id)
     except Exception as exc:
         logger.error("[audio/workflow] classify failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=502, detail=f"Workflow classification failed: {exc}")
+
+    if workflow.get("intent") == "denied":
+        reason = workflow.get("denial_reason", "None of your connected apps can handle that request.")
+        logger.info("[audio/workflow] denied: %s user=%s", reason, user_id)
+        return {"workflow_status": "denied", "workflow_message": reason}
 
     validation_errors = validate(workflow)
     if validation_errors:
@@ -933,14 +944,18 @@ async def workflow_create(payload: WorkflowCreateRequest):
       - steps           (app/action/params for each action)
     Both are saved to MongoDB and returned.
     """
-    # 1. Classify — runs synchronously against Gemini, off the event loop
+    # 1. Classify with per-user app filtering
     logger.info("[workflow/create] classifying transcript=%r user=%s",
                 payload.transcript, payload.user_id)
     try:
-        workflow = await asyncio.to_thread(classify, payload.transcript)
+        workflow = await classify_for_user(payload.transcript, payload.user_id)
     except Exception as exc:
         logger.error("[workflow/create] classify failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=502, detail=f"Classification failed: {exc}")
+
+    if workflow.get("intent") == "denied":
+        reason = workflow.get("denial_reason", "None of your connected apps can handle that request.")
+        raise HTTPException(status_code=422, detail={"intent": "denied", "reason": reason})
 
     # 2. Soft-validate (never blocks — just surfaces errors to the caller)
     errors = validate(workflow)
@@ -1069,6 +1084,40 @@ async def list_user_webhooks(user_id: str):
     return {"webhooks": webhooks}
 
 
+class DominosCredentialsRequest(BaseModel):
+    firstName:      str
+    lastName:       str = ""
+    email:          str = ""
+    phone:          str = ""
+    address:        str
+    cardNumber:     str = ""
+    cardExpiration: str = ""
+    cardCvv:        str = ""
+    cardZip:        str = ""
+
+
+@app.post("/user/{user_id}/credentials/dominos")
+async def save_dominos_credentials(user_id: str, payload: DominosCredentialsRequest):
+    """Save Domino's delivery info and optional payment card for a user."""
+    data: dict = {
+        "firstName": payload.firstName.strip(),
+        "lastName":  payload.lastName.strip(),
+        "email":     payload.email.strip(),
+        "phone":     payload.phone.strip(),
+        "address":   payload.address.strip(),
+    }
+    if payload.cardNumber.strip():
+        data["card"] = {
+            "number":     payload.cardNumber.strip(),
+            "expiration": payload.cardExpiration.strip(),
+            "cvv":        payload.cardCvv.strip(),
+            "zip":        payload.cardZip.strip(),
+        }
+    await token_store.save_token(user_id, "dominos", data)
+    logger.info("[credentials/dominos] saved user=%s has_card=%s", user_id, bool(payload.cardNumber))
+    return {"status": "ok"}
+
+
 @app.delete("/user/{user_id}/webhooks/{app}/{action}")
 async def delete_user_webhook(user_id: str, app: str, action: str):
     """Remove a webhook for a specific app+action."""
@@ -1097,9 +1146,21 @@ async def workflow_preview(payload: WorkflowPreviewRequest):
     """Classify a prompt → workflow JSON (no persistence). Used by /run page."""
     logger.info("[workflow/preview] user=%s prompt=%r", payload.user_id, payload.prompt)
     try:
-        workflow = await asyncio.to_thread(classify, payload.prompt)
+        workflow = await classify_for_user(payload.prompt, payload.user_id)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Classification failed: {exc}")
+
+    if workflow.get("intent") == "denied":
+        reason = workflow.get("denial_reason", "None of your connected apps can handle that request.")
+        return {
+            "intent":         "denied",
+            "denial_reason":  reason,
+            "trigger_phrase": "",
+            "steps":          [],
+            "missing_params": [],
+            "confidence":     0.0,
+            "validation_errors": [],
+        }
 
     errors = validate(workflow)
     return {
@@ -1262,6 +1323,42 @@ async def auth_slack_callback(code: str, state: str):
     })
     logger.info("[auth/slack] token saved user=%s", user_id)
     return HTMLResponse(_CONNECTED_HTML.format(service="Slack"))
+
+
+# ── Notion ────────────────────────────────────────────────────────────────────
+
+@app.get("/auth/notion")
+async def auth_notion(user_id: str):
+    params = {
+        "client_id":     NOTION_CLIENT_ID,
+        "response_type": "code",
+        "owner":         "user",
+        "redirect_uri":  f"{BACKEND_URL}/auth/notion/callback",
+        "state":         user_id,
+    }
+    return RedirectResponse("https://api.notion.com/v1/oauth/authorize?" + urlencode(params))
+
+
+@app.get("/auth/notion/callback")
+async def auth_notion_callback(code: str, state: str):
+    user_id = state
+    credentials = base64.b64encode(f"{NOTION_CLIENT_ID}:{NOTION_CLIENT_SECRET}".encode()).decode()
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://api.notion.com/v1/oauth/token",
+            headers={"Authorization": f"Basic {credentials}", "Content-Type": "application/json"},
+            json={"grant_type": "authorization_code", "code": code, "redirect_uri": f"{BACKEND_URL}/auth/notion/callback"},
+        )
+    data = resp.json()
+    if "access_token" not in data:
+        raise HTTPException(status_code=400, detail=data.get("error", "Notion OAuth failed"))
+
+    await token_store.save_token(user_id, "notion", {
+        "access_token": data["access_token"],
+        "workspace_id": data.get("workspace_id"),
+    })
+    logger.info("[auth/notion] token saved user=%s", user_id)
+    return HTMLResponse(_CONNECTED_HTML.format(service="Notion"))
 
 
 # ── Connection status ─────────────────────────────────────────────────────────

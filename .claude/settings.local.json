@@ -14,7 +14,8 @@
       "WebFetch(domain:innovationlab.fetch.ai)",
       "Bash(git checkout *)",
       "Bash(git merge *)",
-      "Bash(git fetch *)"
+      "Bash(git fetch *)",
+      "Bash(git pull *)"
     ]
   }
 }

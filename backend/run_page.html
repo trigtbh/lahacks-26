@@ -352,6 +352,10 @@ async function generateWorkflow() {
       throw new Error(err.detail || res.statusText);
     }
     const data = await res.json();
+    if (data.intent === 'denied') {
+      setStatus('gen-status', `Denied: ${data.denial_reason}`, 'var(--error)');
+      return;
+    }
     _workflow = data;
     displayWorkflow(data);
     setStatus('gen-status', 'Done.');
