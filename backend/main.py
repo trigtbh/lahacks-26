@@ -795,6 +795,28 @@ async def list_user_webhooks(user_id: str):
     return {"webhooks": webhooks}
 
 
+class DominosCredentialsRequest(BaseModel):
+    firstName: str
+    lastName:  str = ""
+    email:     str = ""
+    phone:     str = ""
+    address:   str
+
+
+@app.post("/user/{user_id}/credentials/dominos")
+async def save_dominos_credentials(user_id: str, payload: DominosCredentialsRequest):
+    """Save Domino's delivery info for a user."""
+    await token_store.save_token(user_id, "dominos", {
+        "firstName": payload.firstName.strip(),
+        "lastName":  payload.lastName.strip(),
+        "email":     payload.email.strip(),
+        "phone":     payload.phone.strip(),
+        "address":   payload.address.strip(),
+    })
+    logger.info("[credentials/dominos] saved user=%s", user_id)
+    return {"status": "ok"}
+
+
 @app.delete("/user/{user_id}/webhooks/{app}/{action}")
 async def delete_user_webhook(user_id: str, app: str, action: str):
     """Remove a webhook for a specific app+action."""

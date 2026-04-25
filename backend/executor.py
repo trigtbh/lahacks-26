@@ -23,6 +23,8 @@ from google_auth import get_google_creds
 from innate_executor import execute_innate
 from ai.condition_eval import evaluate_condition
 
+_DOMINOS_SERVICE_URL = os.environ.get("DOMINOS_SERVICE_URL", "http://localhost:3001")
+
 log = logging.getLogger(__name__)
 
 _TIMEOUT = 10.0
@@ -272,6 +274,73 @@ async def _gcal_cancel_event(user_id: str, params: dict) -> None:
 
 
 # ─────────────────────────────────────────────
+# Domino's handlers
+# ─────────────────────────────────────────────
+
+_DOMINOS_SIZE_CODES = {
+    "small": "10SCREEN", "10": "10SCREEN",
+    "medium": "12SCREEN", "12": "12SCREEN",
+    "large": "14SCREEN", "14": "14SCREEN",
+    "xlarge": "16SCREEN", "extra large": "16SCREEN", "16": "16SCREEN",
+}
+
+_DOMINOS_TOPPING_CODES = {
+    "pepperoni": "P", "sausage": "S", "bacon": "B", "beef": "Du",
+    "mushrooms": "M", "onions": "O", "green peppers": "G", "peppers": "Rp",
+    "extra cheese": "C",
+}
+
+
+def _build_dominos_item(params: dict) -> dict:
+    """Translate classifier size/toppings params into a dominos item dict."""
+    size = str(params.get("size", "large")).lower()
+    code = _DOMINOS_SIZE_CODES.get(size, "14SCREEN")
+
+    toppings = params.get("toppings", [])
+    if isinstance(toppings, str):
+        toppings = [toppings]
+
+    options: dict = {"X": {"1/1": "1"}, "C": {"1/1": "1"}}  # default: sauce + cheese
+    for topping in toppings:
+        tc = _DOMINOS_TOPPING_CODES.get(topping.lower())
+        if tc:
+            options[tc] = {"1/1": "1"}
+
+    return {"code": code, "options": options}
+
+
+async def _dominos_order_pizza(user_id: str, params: dict) -> dict:
+    creds = await token_store.get_token(user_id, "dominos")
+    if not creds:
+        raise ValueError(f"No Domino's credentials for user '{user_id}' — connect via onboarding")
+
+    items = params.get("items") or [_build_dominos_item(params)]
+
+    payload = {
+        "address":   params.get("address")   or creds.get("address", ""),
+        "firstName": params.get("firstName") or creds.get("firstName", "Customer"),
+        "lastName":  params.get("lastName")  or creds.get("lastName", ""),
+        "phone":     params.get("phone")     or creds.get("phone", "555-555-5555"),
+        "email":     creds.get("email", ""),
+        "items":     items,
+    }
+    if not payload["address"]:
+        raise ValueError("No delivery address — set one in Domino's credentials")
+
+    if params.get("payment"):
+        payload["payment"] = params["payment"]
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(f"{_DOMINOS_SERVICE_URL}/order", json=payload)
+        resp.raise_for_status()
+
+    result = resp.json()
+    log.info("Dominos order user=%s store=%s price=%s placed=%s",
+             user_id, result.get("storeID"), result.get("price"), result.get("placed"))
+    return result
+
+
+# ─────────────────────────────────────────────
 # Slack handlers
 # ─────────────────────────────────────────────
 
@@ -479,6 +548,7 @@ _OAUTH_HANDLERS: dict[tuple[str, str], Any] = {
     ("google_drive",     "search_files"):    _drive_search_files,
     ("google_drive",     "share_file"):      _drive_share_file,
     ("google_flights",   "search_flights"):  _flights_search_flights,
+    ("dominos",          "order_pizza"):     _dominos_order_pizza,
 }
 
 _SLACK_ACTIONS = {"send_dm", "send_channel"}
