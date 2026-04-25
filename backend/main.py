@@ -17,6 +17,13 @@ load_dotenv()
 from agentverse_client import find_agent, send_to_agent, start_gateway
 import session_store as sessions
 
+# ── Workflow pipeline ─────────────────────────────────────────────────────────
+import asyncio
+import workflow_store
+from executor import execute_workflow
+from ai.classifier import classify
+from ai.validator import validate
+
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
 ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")  # "George"
 
@@ -390,6 +397,142 @@ async def agent_chat(payload: AgentChatRequest):
         user_id=payload.user_id,
     )
     return await workflow_execute(fake_workflow)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# WORKFLOW ENDPOINTS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class WorkflowCreateRequest(BaseModel):
+    user_id:    str
+    transcript: str   # natural language, e.g. "When I say I'm running late, ..."
+
+
+class WorkflowTriggerRequest(BaseModel):
+    user_id:        str
+    trigger_phrase: str
+
+
+# ---------------------------------------------------------------------------
+# POST /workflow/create
+# Classify a natural-language transcript → workflow schema → save to MongoDB.
+# ---------------------------------------------------------------------------
+@app.post("/workflow/create")
+async def workflow_create(payload: WorkflowCreateRequest):
+    """
+    Turn a natural-language transcript into a workflow schema and persist it.
+
+    Example body:
+    {
+      "user_id": "user123",
+      "transcript": "When I say I'm running late, shift my next meeting by 10 mins and email the attendees"
+    }
+
+    The AI classifier extracts:
+      - trigger_phrase  (the phrase that fires this workflow later)
+      - steps           (app/action/params for each action)
+    Both are saved to MongoDB and returned.
+    """
+    # 1. Classify — runs synchronously against Gemini, off the event loop
+    logger.info("[workflow/create] classifying transcript=%r user=%s",
+                payload.transcript, payload.user_id)
+    try:
+        workflow = await asyncio.to_thread(classify, payload.transcript)
+    except Exception as exc:
+        logger.error("[workflow/create] classify failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=502, detail=f"Classification failed: {exc}")
+
+    # 2. Soft-validate (never blocks — just surfaces errors to the caller)
+    errors = validate(workflow)
+    if errors:
+        logger.warning("[workflow/create] validation errors: %s", errors)
+
+    # 3. Extract what we need to store
+    trigger_phrase = workflow.get("trigger_phrase", "").strip()
+    steps          = workflow.get("steps", [])
+
+    if not trigger_phrase:
+        raise HTTPException(status_code=422, detail="Classifier returned no trigger_phrase")
+
+    # 4. Persist
+    workflow_id = await workflow_store.save_workflow(
+        user_id=payload.user_id,
+        trigger_phrase=trigger_phrase,
+        steps=steps,
+    )
+    logger.info("[workflow/create] saved id=%s trigger=%r user=%s",
+                workflow_id, trigger_phrase, payload.user_id)
+
+    return {
+        "workflow_id":       workflow_id,
+        "trigger_phrase":    trigger_phrase,
+        "steps":             steps,
+        "missing_params":    workflow.get("missing_params", []),
+        "confidence":        workflow.get("confidence"),
+        "validation_errors": errors,
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /workflow/list/{user_id}
+# ---------------------------------------------------------------------------
+@app.get("/workflow/list/{user_id}")
+async def workflow_list(user_id: str):
+    """Return all saved workflows for a user."""
+    workflows = await workflow_store.list_workflows(user_id)
+    return {"workflows": workflows}
+
+
+# ---------------------------------------------------------------------------
+# POST /workflow/trigger
+# Match a spoken phrase to a saved workflow and execute it.
+# ---------------------------------------------------------------------------
+@app.post("/workflow/trigger")
+async def workflow_trigger(payload: WorkflowTriggerRequest):
+    """
+    Fire a workflow by trigger phrase.
+    Looks up the best matching workflow in MongoDB for this user,
+    then executes the Gmail + Google Calendar steps.
+    """
+    doc = await workflow_store.find_by_trigger(payload.user_id, payload.trigger_phrase)
+    if not doc:
+        logger.info("[workflow/trigger] no match for %r user=%s",
+                    payload.trigger_phrase, payload.user_id)
+        return {
+            "status":  "no_match",
+            "message": f"No workflow found matching '{payload.trigger_phrase}'",
+        }
+
+    logger.info("[workflow/trigger] matched trigger=%r id=%s user=%s",
+                doc["trigger_phrase"], doc["_id"], payload.user_id)
+
+    # execute_workflow is synchronous (Google API calls) — run off the event loop
+    result = await asyncio.to_thread(execute_workflow, doc["steps"])
+
+    audio_b64 = None
+    if result["status"] == "success":
+        summary = f"Done. Emailed your attendees and pushed the meeting back."
+        if result.get("event_title"):
+            summary = f"Done. Emailed attendees of '{result['event_title']}' and pushed it back 15 minutes."
+        audio_b64 = await _tts_pcm(summary)
+
+    return {
+        "status":          result["status"],
+        "trigger_matched": doc["trigger_phrase"],
+        "steps_completed": result["steps_completed"],
+        "steps_failed":    result["steps_failed"],
+        "event_title":     result.get("event_title"),
+        "audio_b64":       audio_b64,
+    }
+
+
+# ---------------------------------------------------------------------------
+# DELETE /workflow/{workflow_id}
+# ---------------------------------------------------------------------------
+@app.delete("/workflow/{workflow_id}")
+async def workflow_delete(workflow_id: str):
+    deleted = await workflow_store.delete_workflow(workflow_id)
+    return {"deleted": deleted}
 
 
 if __name__ == "__main__":
