@@ -87,12 +87,9 @@ function ThemeRow({ label, k, type, value, onChange }) {
 function WelcomeStep({ userId, setUserId, onNext, theme }) {
   return (
     <div className="page page--welcome">
-      <div className="noise" />
-      <div className="w-orb w-orb--1" />
-      <div className="w-orb w-orb--2" />
-      <div className="w-orb w-orb--3" />
       <div className="welcome-inner">
         <div className="welcome-brand">{theme.appName}</div>
+        <div className="welcome-divider" />
         <h1 className="hero-title">
           Stop doing<br />
           <span className="hero-accent">things yourself.</span>
@@ -101,7 +98,7 @@ function WelcomeStep({ userId, setUserId, onNext, theme }) {
         <div className="welcome-form">
           <div className="field">
             <label className="field-label">Your user ID</label>
-            <input className="text-input" value={userId}
+            <input className="text-input w-input" value={userId}
               onChange={e => setUserId(e.target.value)}
               placeholder="akshai" autoFocus />
           </div>
