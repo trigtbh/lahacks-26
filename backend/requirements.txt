@@ -5,13 +5,12 @@ pydantic
 motor
 python-dotenv
 elevenlabs
-deepgram-sdk>=6.0.0
-uagents
+deepgram-sdk>=3.0,<4.0
+uagents>=0.20.0
 httpx
 # Google APIs (Gmail + Calendar)
 google-auth
 google-auth-oauthlib
 google-auth-httplib2
 google-api-python-client
-# Gemini (classifier)
-google-genai
+# LLM (Gemma via OpenRouter — uses openai SDK above)

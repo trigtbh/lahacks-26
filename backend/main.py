@@ -1,3 +1,5 @@
+from dotenv import load_dotenv
+load_dotenv()
 import difflib
 import os
 import re
@@ -5,14 +7,14 @@ import base64
 import struct
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from elevenlabs.client import AsyncElevenLabs
-from deepgram import DeepgramClient
-from dotenv import load_dotenv
+from deepgram import DeepgramClient, PrerecordedOptions
 
-load_dotenv()
 
 from agentverse_client import find_agent, send_to_agent, start_gateway
 import session_store as sessions
@@ -20,6 +22,7 @@ import session_store as sessions
 # ── Workflow pipeline ─────────────────────────────────────────────────────────
 import asyncio
 import workflow_store
+import zapier_store
 from executor import execute_workflow
 from ai.classifier import classify
 from ai.validator import validate
@@ -75,6 +78,13 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # In-memory store: chunk_id -> {"chunks": [bytes, ...], "meta": {...}}
 recording_store: dict[str, dict] = {}
 
@@ -84,9 +94,12 @@ class AudioSessionRequest(BaseModel):
     user_id: str
 
 
+_BASE_DIR = Path(__file__).parent
+
+
 @app.get("/")
 async def serve_index():
-    return FileResponse("index.html")
+    return FileResponse(_BASE_DIR / "index.html")
 
 
 # ---------------------------------------------------------------------------
@@ -261,7 +274,7 @@ async def _execute_saved_workflow(doc: dict, user_id: str) -> dict:
     logger.info("[audio/workflow] executing id=%s trigger=%r user=%s",
                 workflow_id, doc.get("trigger_phrase"), user_id)
 
-    result = await asyncio.to_thread(execute_workflow, doc["steps"])
+    result = await execute_workflow(user_id, doc["steps"])
     return {
         "workflow_status": "executed",
         "workflow_message": "workflow executed",
@@ -343,24 +356,20 @@ async def audio_end(payload: AudioSessionRequest):
 
     try:
         logger.info(f"[audio/end] sending {len(audio_bytes)}B to Deepgram filename={filename}")
-        response = await asyncio.to_thread(
-            client_deepgram.listen.v1.media.transcribe_file,
-            request=audio_bytes,
+        options = PrerecordedOptions(
             model="nova-3",
             language="en",
             smart_format=True,
-            keywords=["Flux:2", "workflow:2"],
         )
-        if isinstance(response, dict):
-            transcript = (
-                response["results"]["channels"][0]["alternatives"][0]["transcript"]
-                if response.get("results") and response["results"].get("channels")
-                else ""
-            )
-        else:
-            channels = getattr(getattr(response, "results", None), "channels", []) or []
-            alternatives = getattr(channels[0], "alternatives", []) if channels else []
-            transcript = getattr(alternatives[0], "transcript", "") if alternatives else ""
+        response = await client_deepgram.listen.asyncrest.v("1").transcribe_file(
+            {"buffer": audio_bytes, "mimetype": mime_type},
+            options,
+        )
+        transcript = (
+            response.results.channels[0].alternatives[0].transcript
+            if response.results and response.results.channels
+            else ""
+        )
         logger.info(f"[audio/end] transcript={transcript!r}")
     except Exception as e:
         logger.error(f"[audio/end] Deepgram error: {e}", exc_info=True)
@@ -596,14 +605,12 @@ async def workflow_trigger(payload: WorkflowTriggerRequest):
     logger.info("[workflow/trigger] matched trigger=%r id=%s user=%s",
                 doc["trigger_phrase"], doc["_id"], payload.user_id)
 
-    # execute_workflow is synchronous (Google API calls) — run off the event loop
-    result = await asyncio.to_thread(execute_workflow, doc["steps"])
+    result = await execute_workflow(payload.user_id, doc["steps"])
 
     audio_b64 = None
     if result["status"] == "success":
-        summary = f"Done. Emailed your attendees and pushed the meeting back."
-        if result.get("event_title"):
-            summary = f"Done. Emailed attendees of '{result['event_title']}' and pushed it back 15 minutes."
+        n = len(result["steps_completed"])
+        summary = f"Done. {n} step{'s' if n != 1 else ''} completed."
         audio_b64 = await _tts_pcm(summary)
 
     return {
@@ -611,7 +618,6 @@ async def workflow_trigger(payload: WorkflowTriggerRequest):
         "trigger_matched": doc["trigger_phrase"],
         "steps_completed": result["steps_completed"],
         "steps_failed":    result["steps_failed"],
-        "event_title":     result.get("event_title"),
         "audio_b64":       audio_b64,
     }
 
@@ -622,6 +628,50 @@ async def workflow_trigger(payload: WorkflowTriggerRequest):
 @app.delete("/workflow/{workflow_id}")
 async def workflow_delete(workflow_id: str):
     deleted = await workflow_store.delete_workflow(workflow_id)
+    return {"deleted": deleted}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ZAPIER WEBHOOK ENDPOINTS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class WebhookRegisterRequest(BaseModel):
+    app:         str
+    action:      str
+    webhook_url: str
+    label:       str = ""
+
+
+@app.post("/user/{user_id}/webhooks")
+async def register_webhook(user_id: str, payload: WebhookRegisterRequest):
+    """
+    Register (or update) a Zapier webhook URL for a specific app+action.
+
+    Example body:
+    { "app": "gmail", "action": "send_email", "webhook_url": "https://hooks.zapier.com/..." }
+    """
+    doc_id = await zapier_store.save_webhook(
+        user_id=user_id,
+        app=payload.app,
+        action=payload.action,
+        webhook_url=payload.webhook_url,
+        label=payload.label,
+    )
+    logger.info("[webhooks] registered user=%s app=%s action=%s", user_id, payload.app, payload.action)
+    return {"id": doc_id, "app": payload.app, "action": payload.action, "status": "ok"}
+
+
+@app.get("/user/{user_id}/webhooks")
+async def list_user_webhooks(user_id: str):
+    """Return all configured Zapier webhooks for a user."""
+    webhooks = await zapier_store.list_webhooks(user_id)
+    return {"webhooks": webhooks}
+
+
+@app.delete("/user/{user_id}/webhooks/{app}/{action}")
+async def delete_user_webhook(user_id: str, app: str, action: str):
+    """Remove a webhook for a specific app+action."""
+    deleted = await zapier_store.delete_webhook(user_id, app, action)
     return {"deleted": deleted}
 
 
