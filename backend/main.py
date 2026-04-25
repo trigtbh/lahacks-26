@@ -109,8 +109,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-if _ONBOARDING_DIR.exists():
-    app.mount("/setup", StaticFiles(directory=_ONBOARDING_DIR, html=True), name="onboarding")
 
 # In-memory store: chunk_id -> {"chunks": [bytes, ...], "meta": {...}}
 recording_store: dict[str, dict] = {}
@@ -120,10 +118,6 @@ class AudioSessionRequest(BaseModel):
     chunk_id: str
     user_id: str
 
-
-@app.get("/")
-async def serve_index():
-    return FileResponse(_BASE_DIR / "index.html")
 
 
 # ---------------------------------------------------------------------------
@@ -813,6 +807,9 @@ async def get_connections(user_id: str):
     services = await token_store.list_connections(user_id)
     return {"connected": services}
 
+
+if _ONBOARDING_DIR.exists():
+    app.mount("/", StaticFiles(directory=_ONBOARDING_DIR, html=True), name="onboarding")
 
 if __name__ == "__main__":
     import uvicorn
