@@ -1,8 +1,5 @@
-<<<<<<< HEAD
 venv/
 .env*
-=======
-.env
 local.properties
 *.iml
 .gradle/
@@ -14,4 +11,4 @@ captures/
 .cxx/
 *.keystore
 google-services.json
->>>>>>> 10a6157 (Did some stuff)
+__pycache__/
