@@ -8,6 +8,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.flow.app.FluxEvents
+import com.flow.app.TtsQueue
 import com.flow.app.audio.AudioCaptureService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -53,7 +54,7 @@ class FlowViewModel(app: Application) : AndroidViewModel(app) {
                     statusMessage = "Building workflow...",
                     workflowCommand = command,
                 )
-                tts?.speak("Workflow will be created", TextToSpeech.QUEUE_FLUSH, null, null)
+                TtsQueue.speak("Workflow will be created")
             }
         }
         viewModelScope.launch {
@@ -62,7 +63,16 @@ class FlowViewModel(app: Application) : AndroidViewModel(app) {
                     statusMessage = "Talking to Caltrain...",
                     workflowCommand = "Connecting to Caltrain agent",
                 )
-                tts?.speak("Connecting to Caltrain", TextToSpeech.QUEUE_FLUSH, null, null)
+                TtsQueue.speak("Connecting to Caltrain")
+            }
+        }
+        viewModelScope.launch {
+            FluxEvents.agentSearchTriggered.collect { agentName ->
+                _uiState.value = _uiState.value.copy(
+                    statusMessage = "Finding agent...",
+                    workflowCommand = "Searching for $agentName on Agentverse",
+                )
+                TtsQueue.speak("Finding $agentName on Agentverse")
             }
         }
     }
@@ -81,6 +91,7 @@ class FlowViewModel(app: Application) : AndroidViewModel(app) {
         tts = TextToSpeech(getApplication()) { status ->
             if (status == TextToSpeech.SUCCESS) {
                 tts?.setAudioAttributes(audioAttrs)
+                TtsQueue.init(tts!!, viewModelScope)
             }
         }
 

@@ -122,17 +122,37 @@ _COMMAND_VARIANTS = {
     ],
 }
 
+_AGENTVERSE_VARIANTS = ["agentverse", "agent verse", "agentaverse", "agentoverse"]
+
+_FIND_AGENT_RE = re.compile(
+    r"\b(?:find|search\s+for|search|look\s+up)\s+(?P<name>.+?)\s+(?:on|in|at)\s+\S+$",
+    re.IGNORECASE,
+)
+
 def _word_fuzzy_matches(word: str, targets: list, threshold: float = 0.75) -> bool:
     w = word.lower().strip(".,!?\"'-")
     return any(difflib.SequenceMatcher(None, w, t).ratio() >= threshold for t in targets)
 
-def _classify_command(command: str) -> str:
-    """Return the best matching action name for the text after 'flux', or 'unknown'."""
+def _extract_agentverse_search(command: str) -> str | None:
+    """If command is a fuzzy 'find X on agentverse' pattern, return agent name X."""
+    words = command.lower().split()
+    if not any(_word_fuzzy_matches(w, _AGENTVERSE_VARIANTS) for w in words):
+        return None
+    m = _FIND_AGENT_RE.search(command)
+    return m.group("name").strip() if m else None
+
+def _classify_command(command: str) -> tuple[str, str]:
+    """Return (action, agent_name). agent_name is non-empty only for agentverse_search."""
     if not command:
-        return "unknown"
+        return "unknown", ""
+
+    agent_name = _extract_agentverse_search(command)
+    if agent_name:
+        logger.info(f"[classify] command={command!r} action=agentverse_search agent={agent_name!r}")
+        return "agentverse_search", agent_name
+
     text = command.lower().strip()
-    best_action = "unknown"
-    best_score = 0.4
+    best_action, best_score = "unknown", 0.4
     for action, variants in _COMMAND_VARIANTS.items():
         for variant in variants:
             score = difflib.SequenceMatcher(None, text, variant).ratio()
@@ -140,7 +160,7 @@ def _classify_command(command: str) -> str:
                 best_score = score
                 best_action = action
     logger.info(f"[classify] command={command!r} action={best_action} score={best_score:.2f}")
-    return best_action
+    return best_action, ""
 
 def _normalize_pcm(pcm: bytes, target_peak: float = 0.9) -> bytes:
     """Scale 16-bit PCM so the loudest sample hits target_peak of full scale."""
@@ -259,8 +279,8 @@ async def audio_end(payload: AudioSessionRequest):
         raise HTTPException(status_code=502, detail=f"ElevenLabs transcription failed: {e}")
 
     command = _extract_after_flux(transcript)
-    action = _classify_command(command)
-    logger.info(f"[audio/end] command={command!r} action={action}")
+    action, agent_name = _classify_command(command)
+    logger.info(f"[audio/end] command={command!r} action={action} agent_name={agent_name!r}")
 
     return JSONResponse({
         "chunk_id": chunk_id,
@@ -268,6 +288,7 @@ async def audio_end(payload: AudioSessionRequest):
         "transcript": transcript,
         "command": command,
         "action": action,
+        "agent_name": agent_name,
     })
 
 

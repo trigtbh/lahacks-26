@@ -20,6 +20,7 @@ data class EndAudioResponse(
     val transcript: String,
     val command: String,
     val action: String,
+    val agentName: String,
 )
 
 data class WorkflowRequest(
@@ -99,6 +100,7 @@ class FlowApiClient(baseUrl: String) {
                     transcript = res.optString("transcript", ""),
                     command = res.optString("command", ""),
                     action = res.optString("action", "unknown"),
+                    agentName = res.optString("agent_name", ""),
                 )
             }
         }
@@ -117,7 +119,7 @@ class FlowApiClient(baseUrl: String) {
                 .url("$base/audio/stream")
                 .addHeader("X-User-Id", userId)
                 .addHeader("X-Chunk-Id", chunkId)
-                .addHeader("X-Audio-Sample-Rate", "16000")
+                .addHeader("X-Audio-Sample-Rate", AudioCaptureManager.SAMPLE_RATE.toString())
                 .addHeader("X-Audio-Encoding", "pcm_s16le")
                 .addHeader("X-Audio-Channels", "1")
                 .post(chunk.toRequestBody("application/octet-stream".toMediaType()))

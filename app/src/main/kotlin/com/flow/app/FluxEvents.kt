@@ -16,6 +16,9 @@ object FluxEvents {
     private val _caltrainTriggered = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
     val caltrainTriggered = _caltrainTriggered.asSharedFlow()
 
+    private val _agentSearchTriggered = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    val agentSearchTriggered = _agentSearchTriggered.asSharedFlow()
+
     fun emitTrigger(transcript: String) {
         _triggerDetected.tryEmit(transcript)
     }
@@ -30,5 +33,9 @@ object FluxEvents {
 
     fun emitCaltrainTriggered() {
         _caltrainTriggered.tryEmit(Unit)
+    }
+
+    fun emitAgentSearchTriggered(agentName: String) {
+        _agentSearchTriggered.tryEmit(agentName)
     }
 }

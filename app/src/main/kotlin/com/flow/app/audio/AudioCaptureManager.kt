@@ -24,7 +24,7 @@ import kotlin.coroutines.coroutineContext
 class AudioCaptureManager {
 
     companion object {
-        const val SAMPLE_RATE = 16000       // 16kHz — good balance for speech recognition
+        const val SAMPLE_RATE = 16000
         const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
         const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
         const val CHUNK_DURATION_MS = 100   // emit a chunk every 100ms
