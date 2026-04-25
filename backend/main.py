@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from elevenlabs.client import AsyncElevenLabs
 from deepgram import DeepgramClient, PrerecordedOptions
@@ -76,6 +77,13 @@ async def lifespan(app: FastAPI):
     yield
 
 app = FastAPI(lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # In-memory store: chunk_id -> {"chunks": [bytes, ...], "meta": {...}}
 recording_store: dict[str, dict] = {}
