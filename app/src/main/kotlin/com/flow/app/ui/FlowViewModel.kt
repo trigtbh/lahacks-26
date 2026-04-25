@@ -63,7 +63,6 @@ class FlowViewModel(app: Application) : AndroidViewModel(app) {
                     statusMessage = "Talking to Caltrain...",
                     workflowCommand = "Connecting to Caltrain agent",
                 )
-                TtsQueue.speak("Connecting to Caltrain")
             }
         }
         viewModelScope.launch {
@@ -72,7 +71,6 @@ class FlowViewModel(app: Application) : AndroidViewModel(app) {
                     statusMessage = "Finding agent...",
                     workflowCommand = "Searching for $agentName on Agentverse",
                 )
-                TtsQueue.speak("Finding $agentName on Agentverse")
             }
         }
     }
