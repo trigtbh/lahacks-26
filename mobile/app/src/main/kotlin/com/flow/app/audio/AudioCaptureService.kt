@@ -44,11 +44,12 @@ class AudioCaptureService : Service() {
         private const val SPEECH_END_MULTIPLIER = 1.05
         private const val MIN_SPEECH_DELTA = 10.0
         private const val START_TRIGGER_CHUNKS = 2
-        private const val SILENCE_TIMEOUT_MS = 1500L
+        private const val SILENCE_TIMEOUT_MS = 900L
         private const val MIN_UTTERANCE_MS = 700L
         private const val PRE_ROLL_MS = 500L
         private const val LEVEL_REPORT_INTERVAL_MS = 600L
         private const val POST_WORKFLOW_COOLDOWN_MS = 4000L
+        private const val POST_CONFIRMATION_PROMPT_COOLDOWN_MS = 3500L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -89,10 +90,16 @@ class AudioCaptureService : Service() {
 
     private suspend fun runLoop(userId: String) {
         while (currentCoroutineContext().isActive) {
+            if (TtsQueue.isBusy()) {
+                FluxEvents.emitDebugStatus("Waiting for response playback to finish...")
+                delay(250L)
+                continue
+            }
             val cooldownRemainingMs = cooldownUntilMs - System.currentTimeMillis()
             if (cooldownRemainingMs > 0L) {
                 FluxEvents.emitDebugStatus("Workflow finished. Pausing before next listen...")
                 delay(cooldownRemainingMs)
+                continue
             }
             runSession(userId)
         }
@@ -270,7 +277,17 @@ class AudioCaptureService : Service() {
         FluxEvents.emitSpeechCaptured(resp.transcript)
         FluxEvents.emitDebugStatus("Backend responded for $chunkId with action=${resp.action}")
 
-        if (resp.workflowStatus == "created" || resp.workflowStatus == "executed") {
+        if (resp.workflowStatus == "awaiting_confirmation") {
+            cooldownUntilMs = System.currentTimeMillis() + POST_CONFIRMATION_PROMPT_COOLDOWN_MS
+            FluxEvents.emitDebugStatus(resp.workflowMessage.ifBlank { "Confirmation required" })
+            TtsQueue.speak(resp.workflowMessage.ifBlank { "Please confirm the workflow" })
+        } else if (
+            resp.workflowStatus == "created" ||
+            resp.workflowStatus == "executed" ||
+            resp.workflowStatus == "partial" ||
+            resp.workflowStatus == "failed" ||
+            resp.workflowStatus == "cancelled"
+        ) {
             cooldownUntilMs = System.currentTimeMillis() + POST_WORKFLOW_COOLDOWN_MS
             FluxEvents.emitDebugStatus(resp.workflowMessage.ifBlank { "Workflow finished. Cooling down..." })
             TtsQueue.speak(resp.workflowMessage.ifBlank { "workflow ${resp.workflowStatus}" })

@@ -27,10 +27,12 @@ import session_store as sessions
 
 # ── Workflow pipeline ─────────────────────────────────────────────────────────
 import asyncio
+import audit_store
+import confirmation_store
 import workflow_store
 import zapier_store
 import token_store
-from executor import execute_workflow, execute_workflow_stream
+from executor import execute_workflow, execute_workflow_stream, preview_workflow
 from ai.classifier import classify
 from ai.validator import validate
 
@@ -149,6 +151,16 @@ _CONNECT_RE = re.compile(
     re.IGNORECASE,
 )
 _DISCONNECT_RE = re.compile(r"\b(disconnect|stop|exit|end|close|bye)\b", re.IGNORECASE)
+_CONFIRM_RE = re.compile(r"^\s*(yes|yeah|yep|confirm|do it|go ahead|run it|execute it)\s*[.!]?\s*$", re.IGNORECASE)
+_DECLINE_RE = re.compile(r"^\s*(no|nope|cancel|stop|don'?t|do not)\s*[.!]?\s*$", re.IGNORECASE)
+_EXPLICIT_CREATE_RE = re.compile(
+    r"\b("
+    r"when i say|whenever i say|if i say|"
+    r"create (?:a )?workflow|make (?:a )?workflow|build (?:a )?workflow|new workflow|"
+    r"set up (?:a )?workflow|save (?:this )?workflow"
+    r")\b",
+    re.IGNORECASE,
+)
 
 
 def _parse_connect_intent(text: str) -> str | None:
@@ -313,7 +325,78 @@ def _contains_workflow(transcript: str) -> bool:
     return "work flow" in transcript.lower()
 
 
-async def _create_workflow_from_transcript(user_id: str, transcript: str) -> dict:
+def _is_explicit_workflow_creation_request(transcript: str) -> bool:
+    return bool(_EXPLICIT_CREATE_RE.search(transcript))
+
+
+def _preview_failure_message(preview: dict) -> str:
+    step_errors = preview.get("step_errors", [])
+    labels = [str(step.get("step", "")) for step in step_errors]
+    if any(label.startswith("gmail.") for label in labels):
+        return "gmail action failed"
+    if any(label.startswith("google_calendar.") for label in labels):
+        return "calendar action failed"
+    if any(label.startswith("slack.") for label in labels):
+        return "slack action failed"
+    return "workflow preview failed"
+
+
+def _summarize_schema_step(step: dict) -> str:
+    app = str(step.get("app", ""))
+    action = str(step.get("action", ""))
+    params = step.get("params", {}) if isinstance(step.get("params"), dict) else {}
+
+    if app == "google_calendar" and action == "push_event":
+        return f"push the next calendar event by {params.get('by_minutes', '?')} minutes"
+    if app == "google_calendar" and action == "create_event":
+        return f"create a calendar event {params.get('title', '')}".strip()
+    if app == "google_calendar" and action == "cancel_event":
+        return "cancel the next calendar event"
+    if app == "gmail" and action == "send_email":
+        return "send an email"
+    if app == "gmail" and action == "draft_email":
+        return "draft an email"
+    if app == "slack" and action == "send_dm":
+        return "send a Slack message"
+    if app == "slack" and action == "send_channel":
+        return "post in Slack"
+    return f"run {app}.{action}"
+
+
+def _build_create_preview_from_schema(steps: list[dict]) -> dict:
+    preview_steps = []
+    for step in steps:
+        label = f"{step.get('app', '')}.{step.get('action', '')}"
+        preview_steps.append({
+            "step": label,
+            "params": step.get("params", {}),
+            "summary": _summarize_schema_step(step),
+            "status": "ready",
+        })
+    return {
+        "status": "ready",
+        "steps": preview_steps,
+        "step_errors": [],
+    }
+
+
+def _build_confirmation_prompt(kind: str, workflow_trigger: str, preview: dict) -> str:
+    ready_steps = preview.get("steps", [])
+    summaries = [step.get("summary", "") for step in ready_steps if step.get("summary")]
+    short_summaries = ", then ".join(summaries[:2]) if summaries else "run this workflow"
+
+    if kind == "create":
+        return (
+            f"I can create a workflow for {workflow_trigger}. "
+            f"It will {short_summaries}. Say yes to confirm or no to cancel."
+        )
+    return (
+        f"I matched the workflow {workflow_trigger}. "
+        f"I will {short_summaries}. Say yes to confirm or no to cancel."
+    )
+
+
+async def _classify_workflow_request(user_id: str, transcript: str) -> tuple[dict, list[str]]:
     logger.info("[audio/workflow] classifying transcript=%r user=%s", transcript, user_id)
     try:
         workflow = await asyncio.to_thread(classify, transcript)
@@ -332,48 +415,208 @@ async def _create_workflow_from_transcript(user_id: str, transcript: str) -> dic
     if not steps:
         raise HTTPException(status_code=422, detail="Classifier returned no workflow steps")
 
-    existing_workflow = await workflow_store.find_by_trigger(user_id, trigger_phrase)
-    if existing_workflow:
-        logger.info("[audio/workflow] classifier trigger matched existing workflow trigger=%r user=%s",
-                    trigger_phrase, user_id)
-        return await _execute_saved_workflow(existing_workflow, user_id)
+    return workflow, validation_errors
 
-    workflow_id = await workflow_store.save_workflow(
+
+async def _queue_confirmation(
+    *,
+    user_id: str,
+    kind: str,
+    transcript: str,
+    command_text: str,
+    workflow_id: str,
+    workflow_trigger: str,
+    steps: list[dict],
+    preview: dict,
+    workflow_schema: dict,
+    audit_id: str,
+) -> dict:
+    confirmation_store.set_pending(confirmation_store.PendingConfirmation(
         user_id=user_id,
-        trigger_phrase=trigger_phrase,
+        kind=kind,
+        command_text=command_text,
+        transcript=transcript,
+        workflow_id=workflow_id,
+        workflow_trigger=workflow_trigger,
         steps=steps,
-    )
-    logger.info("[audio/workflow] created id=%s trigger=%r user=%s",
-                workflow_id, trigger_phrase, user_id)
-
+        preview=preview,
+        workflow_schema=workflow_schema,
+        audit_id=audit_id,
+    ))
+    confirmation_prompt = _build_confirmation_prompt(kind, workflow_trigger, preview)
+    logger.info("[audio/workflow] queued %s confirmation trigger=%r user=%s", kind, workflow_trigger, user_id)
     return {
-        "workflow_status": "created",
-        "workflow_message": "workflow created",
+        "workflow_status": "awaiting_confirmation",
+        "workflow_message": confirmation_prompt,
         "workflow_id": workflow_id,
-        "workflow_trigger": trigger_phrase,
-        "workflow_schema": {
-            "trigger_phrase": trigger_phrase,
-            "steps": steps,
-            "missing_params": workflow.get("missing_params", []),
-            "confidence": workflow.get("confidence"),
-            "validation_errors": validation_errors,
-        },
+        "workflow_trigger": workflow_trigger,
+        "workflow_preview": preview,
+        "workflow_schema": workflow_schema,
+        "audit_id": audit_id,
+        "confirmation_required": True,
     }
 
 
-async def _execute_saved_workflow(doc: dict, user_id: str) -> dict:
+async def _create_workflow_from_transcript(
+    user_id: str,
+    transcript: str,
+    command_text: str,
+    *,
+    force_create: bool = False,
+) -> dict:
+    workflow, validation_errors = await _classify_workflow_request(user_id, transcript)
+    trigger_phrase = workflow.get("trigger_phrase", "").strip()
+    steps = workflow.get("steps", [])
+
+    existing_workflow = await workflow_store.find_by_trigger(user_id, trigger_phrase)
+    if existing_workflow and not force_create:
+        logger.info("[audio/workflow] classifier trigger matched existing workflow trigger=%r user=%s",
+                    trigger_phrase, user_id)
+        return await _prepare_workflow_execution_confirmation(
+            user_id=user_id,
+            transcript=transcript,
+            command_text=command_text,
+            doc=existing_workflow,
+        )
+    if existing_workflow and force_create:
+        logger.info(
+            "[audio/workflow] explicit create request is overriding existing trigger=%r user=%s",
+            trigger_phrase,
+            user_id,
+        )
+
+    preview = _build_create_preview_from_schema(steps)
+    workflow_schema = {
+        "trigger_phrase": trigger_phrase,
+        "steps": steps,
+        "missing_params": workflow.get("missing_params", []),
+        "confidence": workflow.get("confidence"),
+        "validation_errors": validation_errors,
+    }
+
+    audit_id = await audit_store.create_audit_record(user_id, {
+        "status": "awaiting_confirmation",
+        "kind": "create",
+        "transcript": transcript,
+        "command_text": command_text,
+        "workflow_trigger": trigger_phrase,
+        "workflow_schema": workflow_schema,
+        "preview": preview,
+    })
+
+    return await _queue_confirmation(
+        user_id=user_id,
+        kind="create",
+        transcript=transcript,
+        command_text=command_text,
+        workflow_id="",
+        workflow_trigger=trigger_phrase,
+        steps=steps,
+        preview=preview,
+        workflow_schema=workflow_schema,
+        audit_id=audit_id,
+    )
+
+
+async def _prepare_workflow_execution_confirmation(
+    *,
+    user_id: str,
+    transcript: str,
+    command_text: str,
+    doc: dict,
+) -> dict:
+    workflow_id = str(doc.get("_id", ""))
+    preview = await preview_workflow(user_id, doc["steps"])
+    audit_id = await audit_store.create_audit_record(user_id, {
+        "status": "awaiting_confirmation",
+        "kind": "execute",
+        "transcript": transcript,
+        "command_text": command_text,
+        "workflow_id": workflow_id,
+        "workflow_trigger": doc.get("trigger_phrase", ""),
+        "preview": preview,
+    })
+
+    if preview.get("status") == "blocked":
+        await audit_store.update_audit_record(audit_id, {"status": "preview_failed"})
+        return {
+            "workflow_status": "failed",
+            "workflow_message": _preview_failure_message(preview),
+            "workflow_id": workflow_id,
+            "workflow_trigger": doc.get("trigger_phrase", ""),
+            "workflow_preview": preview,
+            "audit_id": audit_id,
+        }
+
+    return await _queue_confirmation(
+        user_id=user_id,
+        kind="execute",
+        transcript=transcript,
+        command_text=command_text,
+        workflow_id=workflow_id,
+        workflow_trigger=doc.get("trigger_phrase", ""),
+        steps=doc["steps"],
+        preview=preview,
+        workflow_schema={},
+        audit_id=audit_id,
+    )
+
+
+async def _execute_saved_workflow(doc: dict, user_id: str, audit_id: str = "") -> dict:
     workflow_id = str(doc.get("_id", ""))
     logger.info("[audio/workflow] executing id=%s trigger=%r user=%s",
                 workflow_id, doc.get("trigger_phrase"), user_id)
 
     result = await execute_workflow(user_id, doc["steps"])
+    workflow_status = "executed" if result["status"] == "success" else result["status"]
+    workflow_message = "workflow executed" if result["status"] == "success" else result.get("message", "workflow failed")
+
+    if audit_id:
+        await audit_store.update_audit_record(audit_id, {
+            "status": workflow_status,
+            "workflow_result": result,
+        })
+
     return {
-        "workflow_status": "executed",
-        "workflow_message": "workflow executed",
+        "workflow_status": workflow_status,
+        "workflow_message": workflow_message,
         "workflow_id": workflow_id,
         "workflow_trigger": doc.get("trigger_phrase", ""),
         "workflow_result": result,
+        "audit_id": audit_id,
     }
+
+
+async def _confirm_pending_workflow(user_id: str, pending: confirmation_store.PendingConfirmation) -> dict:
+    await audit_store.update_audit_record(pending.audit_id, {"status": "confirmed"})
+    if pending.kind == "create":
+        workflow_id = await workflow_store.save_workflow(
+            user_id=user_id,
+            trigger_phrase=pending.workflow_trigger,
+            steps=pending.steps,
+        )
+        logger.info("[audio/workflow] created id=%s trigger=%r user=%s",
+                    workflow_id, pending.workflow_trigger, user_id)
+        await audit_store.update_audit_record(pending.audit_id, {
+            "status": "created",
+            "workflow_id": workflow_id,
+        })
+        return {
+            "workflow_status": "created",
+            "workflow_message": "workflow created",
+            "workflow_id": workflow_id,
+            "workflow_trigger": pending.workflow_trigger,
+            "workflow_preview": pending.preview,
+            "workflow_schema": pending.workflow_schema,
+            "audit_id": pending.audit_id,
+        }
+
+    doc = {
+        "_id": pending.workflow_id,
+        "trigger_phrase": pending.workflow_trigger,
+        "steps": pending.steps,
+    }
+    return await _execute_saved_workflow(doc, user_id, pending.audit_id)
 
 
 # ---------------------------------------------------------------------------
@@ -496,17 +739,57 @@ async def audio_end(payload: AudioSessionRequest):
     workflow_response = None
     workflow_spoken_text = command.strip() or transcript.strip()
     if workflow_spoken_text:
-        existing_workflow = await workflow_store.find_by_trigger(meta["user_id"], workflow_spoken_text)
-        if existing_workflow:
-            workflow_response = await _execute_saved_workflow(existing_workflow, meta["user_id"])
+        explicit_create_request = _is_explicit_workflow_creation_request(workflow_spoken_text)
+        pending_confirmation = confirmation_store.get_pending(meta["user_id"])
+        if pending_confirmation and _CONFIRM_RE.match(workflow_spoken_text):
+            confirmation_store.pop_pending(meta["user_id"])
+            workflow_response = await _confirm_pending_workflow(meta["user_id"], pending_confirmation)
+            action = "workflow"
+            agent_name = ""
+        elif pending_confirmation and _DECLINE_RE.match(workflow_spoken_text):
+            confirmation_store.pop_pending(meta["user_id"])
+            await audit_store.update_audit_record(pending_confirmation.audit_id, {
+                "status": "cancelled",
+                "confirmation_utterance": workflow_spoken_text,
+            })
+            workflow_response = {
+                "workflow_status": "cancelled",
+                "workflow_message": "workflow cancelled",
+                "workflow_id": pending_confirmation.workflow_id,
+                "workflow_trigger": pending_confirmation.workflow_trigger,
+                "audit_id": pending_confirmation.audit_id,
+            }
+            action = "workflow"
+            agent_name = ""
+        elif pending_confirmation:
+            workflow_response = {
+                "workflow_status": "awaiting_confirmation",
+                "workflow_message": "please say yes or no",
+                "workflow_id": pending_confirmation.workflow_id,
+                "workflow_trigger": pending_confirmation.workflow_trigger,
+                "workflow_preview": pending_confirmation.preview,
+                "workflow_schema": pending_confirmation.workflow_schema,
+                "audit_id": pending_confirmation.audit_id,
+                "confirmation_required": True,
+            }
             action = "workflow"
             agent_name = ""
         else:
-            # Old behavior only created a workflow when the transcript looked
-            # like an explicit "workflow" command:
-            #
-            # elif action == "workflow" or _contains_workflow(workflow_spoken_text):
-            workflow_response = await _create_workflow_from_transcript(meta["user_id"], workflow_spoken_text)
+            existing_workflow = None if explicit_create_request else await workflow_store.find_by_trigger(meta["user_id"], workflow_spoken_text)
+            if existing_workflow:
+                workflow_response = await _prepare_workflow_execution_confirmation(
+                    user_id=meta["user_id"],
+                    transcript=transcript,
+                    command_text=workflow_spoken_text,
+                    doc=existing_workflow,
+                )
+            else:
+                workflow_response = await _create_workflow_from_transcript(
+                    meta["user_id"],
+                    workflow_spoken_text,
+                    workflow_spoken_text,
+                    force_create=explicit_create_request,
+                )
             action = "workflow"
             agent_name = ""
 
@@ -988,6 +1271,13 @@ async def get_connections(user_id: str):
     """Return which services the user has connected via OAuth."""
     services = await token_store.list_connections(user_id)
     return {"connected": services}
+
+
+@app.get("/audit/{user_id}")
+async def get_audit_trail(user_id: str):
+    """Return recent workflow audit records for a user."""
+    records = await audit_store.list_audit_records(user_id)
+    return {"records": records}
 
 
 if _ONBOARDING_DIR.exists():

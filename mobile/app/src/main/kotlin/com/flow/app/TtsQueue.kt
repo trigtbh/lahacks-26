@@ -9,12 +9,16 @@ import android.util.Log
 import com.flow.app.audio.AudioCaptureManager
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.UUID
 
 object TtsQueue {
 
     private val channel = Channel<suspend () -> Unit>(Channel.UNLIMITED)
     private var tts: TextToSpeech? = null
+    private val queuedPlaybackCount = AtomicInteger(0)
+
+    fun isBusy(): Boolean = queuedPlaybackCount.get() > 0
 
     fun init(tts: TextToSpeech, scope: CoroutineScope) {
         TtsQueue.tts = tts
@@ -22,12 +26,15 @@ object TtsQueue {
             for (action in channel) {
                 try { action() } catch (e: Exception) {
                     Log.e("TtsQueue", "playback error", e)
+                } finally {
+                    queuedPlaybackCount.updateAndGet { current -> if (current > 0) current - 1 else 0 }
                 }
             }
         }
     }
 
     fun speak(text: String) {
+        queuedPlaybackCount.incrementAndGet()
         channel.trySend {
             val t = tts ?: return@trySend
             suspendCancellableCoroutine { cont ->
@@ -50,6 +57,7 @@ object TtsQueue {
 
     fun playPcm(pcm: ByteArray) {
         if (pcm.isEmpty()) return
+        queuedPlaybackCount.incrementAndGet()
         channel.trySend { playPcmSync(pcm) }
     }
 

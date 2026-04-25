@@ -76,7 +76,7 @@ class FlowViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             FluxEvents.workflowTriggered.collect { command ->
                 _uiState.value = _uiState.value.copy(
-                    statusMessage = "Building workflow...",
+                    statusMessage = "Workflow ready...",
                     workflowCommand = command,
                 )
             }
