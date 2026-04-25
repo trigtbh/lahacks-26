@@ -63,7 +63,7 @@ class ChatMessage(Model):
 
 # ── Cross-loop state ──────────────────────────────────────────────────────────
 
-_outgoing: queue.Queue = queue.Queue()          # (address, text, user_id) — thread-safe
+_outgoing: queue.Queue = queue.Queue()          # (address, text, user_id, use_query) — thread-safe
 _pending: dict[str, asyncio.Future] = {}        # user_id → Future (lives in FastAPI's loop)
 _agent_to_user: dict[str, str] = {}             # agent_address → user_id (for ChatMessage replies)
 _fastapi_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -91,19 +91,22 @@ async def _flush_outgoing(ctx: Context) -> None:
     """Drain the outgoing queue and send via ctx.send(). Runs in gateway's loop."""
     while True:
         try:
-            address, text, user_id = _outgoing.get_nowait()
+            address, text, user_id, use_query = _outgoing.get_nowait()
         except queue.Empty:
             break
 
-        # Send using Chat Protocol so community agents understand us
-        msg = ChatMessage(
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            msg_id=str(uuid.uuid4()),
-            content=[TextContent(type="text", text=text)],
-        )
-        _agent_to_user[address] = user_id
+        if use_query:
+            msg = UserQuery(text=text, user_id=user_id)
+            logger.info(f"[gateway] sent UserQuery to {address} user={user_id}")
+        else:
+            msg = ChatMessage(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                msg_id=str(uuid.uuid4()),
+                content=[TextContent(type="text", text=text)],
+            )
+            _agent_to_user[address] = user_id
+            logger.info(f"[gateway] sent ChatMessage to {address} user={user_id}")
         await ctx.send(address, msg)
-        logger.info(f"[gateway] sent ChatMessage to {address} user={user_id}")
 
 
 @gateway.on_message(model=AgentReply)
@@ -139,16 +142,20 @@ async def send_to_agent(
     agent_address: str,
     message: str,
     user_id: str,
-    timeout: float = 30.0,
+    timeout: float = 60.0,
 ) -> str:
     """
     Enqueue a message for an agent and await the reply.
+    Uses UserQuery for known/custom agents, ChatMessage for community agents.
     Safe to call from FastAPI's async context.
     """
+    known_addresses = {addr for addr, _ in KNOWN_AGENTS.values()}
+    use_query = agent_address in known_addresses
+
     loop = asyncio.get_running_loop()
     future: asyncio.Future[str] = loop.create_future()
     _pending[user_id] = future
-    _outgoing.put_nowait((agent_address, message, user_id))
+    _outgoing.put_nowait((agent_address, message, user_id, use_query))
 
     try:
         return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
@@ -163,7 +170,7 @@ async def send_to_agent(
 
 KNOWN_AGENTS: dict[str, tuple[str, str]] = {
     # "spoken name": ("agent1q...", "Display Name")
-    "caltrain": ("agent1qdxz2kgv8xfdlau4z5hy6zyzxtxxfdz7rl8jvz5nypyj7fkpjnguj2pfpuz", "Caltrain"),
+    "caltrain": ("agent1qtuuyttz8ujuxceq0gllcerlksjneenrh2mfcm67st8qrm9lzzh3cd7f9h6", "Caltrain"),
 }
 
 
