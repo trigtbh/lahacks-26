@@ -34,6 +34,7 @@ android {
         buildConfigField("String", "MWDAT_APPLICATION_ID", "\"${localProp("mwdat_application_id")}\"")
         buildConfigField("String", "MWDAT_CLIENT_TOKEN", "\"${localProp("mwdat_client_token")}\"")
         buildConfigField("String", "FLOW_API_BASE_URL", "\"${localProp("flow_api_base_url")}\"")
+        buildConfigField("String", "FLOW_USER_ID", "\"${localProp("flow_user_id")}\"")
     }
 
     buildTypes {
