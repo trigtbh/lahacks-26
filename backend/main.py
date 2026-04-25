@@ -1,5 +1,4 @@
 from dotenv import load_dotenv
-load_dotenv()
 import difflib
 import ipaddress
 import json

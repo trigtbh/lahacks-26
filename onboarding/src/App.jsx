@@ -26,7 +26,7 @@ const AUTH_GROUPS = {
 // ── Theme ─────────────────────────────────────────────────────────────────────
 
 const DEFAULT_THEME = {
-  appName:"idlemax.ing", tagline:"Voice automations for Ray-Ban glasses.",
+  appName:"idlemaxing", tagline:"Voice automations for Ray-Ban glasses.",
   accentColor:"#ffffff", bgColor:"#080808", cardBg:"#111111",
   borderColor:"#1e1e1e", successColor:"#4ade80", mutedColor:"#555555",
 };
@@ -89,10 +89,9 @@ function WelcomeStep({ userId, setUserId, onNext, theme }) {
     <div className="page page--welcome">
       <div className="welcome-inner">
         <div className="welcome-brand">{theme.appName}</div>
-        <div className="welcome-divider" />
         <h1 className="hero-title">
           Stop doing<br />
-          <span className="hero-accent">things yourself.</span>
+          <span className="hero-accent">things yourself</span>
         </h1>
         <p className="hero-sub">{theme.tagline}</p>
         <div className="welcome-form">
@@ -106,7 +105,6 @@ function WelcomeStep({ userId, setUserId, onNext, theme }) {
             Get started <span className="arr">→</span>
           </button>
         </div>
-        <p className="hint">Select apps · Connect accounts · Start talking</p>
       </div>
       <div className="welcome-chad">
         <img src="/Chad.png" alt="Chad" className="chad-img" />
@@ -171,7 +169,7 @@ function SelectStep({ selected, setSelected, onNext }) {
   );
 }
 
-function ConnectStep({ selected, userId, connected, onRefresh, onDone }) {
+function ConnectStep({ selected, userId, connected, onRefresh, onDone, onBack }) {
   const popupRef = useRef(null);
   const [webhooks, setWebhooks] = useState({});
   const [saved, setSaved]       = useState(new Set());
@@ -255,7 +253,7 @@ function ConnectStep({ selected, userId, connected, onRefresh, onDone }) {
       </div>
 
       <div className="connect-footer">
-        <button className="btn-ghost-sm" onClick={onDone}>Skip remaining</button>
+        <button className="btn-back" onClick={onBack}>← Back</button>
         <button className="btn-primary btn-inline" onClick={onDone}>
           Finish <span className="arr">→</span>
         </button>
@@ -349,34 +347,10 @@ function ThemePanel({ theme, setTheme, onClose }) {
 
 // ── Top bar ───────────────────────────────────────────────────────────────────
 
-function TopBar({ step, theme }) {
-  const steps = [
-    { id:"select",  label:"Select" },
-    { id:"connect", label:"Connect" },
-  ];
-  const ORDER = ["welcome","select","connect","done"];
-  const cur = ORDER.indexOf(step);
-
+function TopBar({ theme }) {
   return (
     <div className="top-bar">
-      <div className="top-brand">
-        <span className="brand-mark sm">◈</span>
-        <span>{theme.appName}</span>
-      </div>
-      <div className="step-track">
-        {steps.map((s, i) => {
-          const idx = i + 1;
-          const done   = cur > idx;
-          const active = cur === idx;
-          return (
-            <div key={s.id} className={`step-pill ${active?"step-pill--active":""} ${done?"step-pill--done":""}`}>
-              <span className="pill-num">{done ? "✓" : idx}</span>
-              {s.label}
-            </div>
-          );
-        })}
-      </div>
-      <div style={{width:80}} />
+      <div className="top-brand">{theme.appName}</div>
     </div>
   );
 }
@@ -397,12 +371,12 @@ export default function App() {
 
   return (
     <>
-      <div className="shell">
-        {step !== "welcome" && step !== "done" && <TopBar step={step} theme={theme} />}
+      <div className={`shell${step === "select" || step === "connect" ? " shell--light" : ""}`}>
+        {step !== "welcome" && step !== "done" && <TopBar theme={theme} />}
 
         {step==="welcome" && <WelcomeStep userId={userId} setUserId={setUserId} onNext={next} theme={theme} />}
         {step==="select"  && <SelectStep  selected={selected} setSelected={setSelected} onNext={next} />}
-        {step==="connect" && <ConnectStep selected={selected} userId={userId} connected={connected} onRefresh={refresh} onDone={next} />}
+        {step==="connect" && <ConnectStep selected={selected} userId={userId} connected={connected} onRefresh={refresh} onDone={next} onBack={() => setStep("select")} />}
         {step==="done"    && <DoneStep    selected={selected} theme={theme} />}
       </div>
 
