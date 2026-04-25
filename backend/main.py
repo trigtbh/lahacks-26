@@ -21,6 +21,8 @@ import session_store as sessions
 import asyncio
 import workflow_store
 from executor import execute_workflow
+from ai.classifier import classify
+from ai.validator import validate
 
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
 ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")  # "George"
@@ -389,9 +391,8 @@ async def agent_chat(payload: AgentChatRequest):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class WorkflowCreateRequest(BaseModel):
-    user_id:        str
-    trigger_phrase: str
-    steps:          list[dict]   # [{app, action, params}, ...]
+    user_id:    str
+    transcript: str   # natural language, e.g. "When I say I'm running late, ..."
 
 
 class WorkflowTriggerRequest(BaseModel):
@@ -401,35 +402,62 @@ class WorkflowTriggerRequest(BaseModel):
 
 # ---------------------------------------------------------------------------
 # POST /workflow/create
-# Save a trigger + step list to MongoDB.
+# Classify a natural-language transcript → workflow schema → save to MongoDB.
 # ---------------------------------------------------------------------------
 @app.post("/workflow/create")
 async def workflow_create(payload: WorkflowCreateRequest):
     """
-    Store a workflow in MongoDB.
+    Turn a natural-language transcript into a workflow schema and persist it.
 
     Example body:
     {
       "user_id": "user123",
-      "trigger_phrase": "I'm running late",
-      "steps": [
-        {"app": "gmail", "action": "send_email",
-         "params": {"to": "calendar.next_event.attendees",
-                    "subject": "Running late",
-                    "body": "I'm running about 15 min late — pushing the meeting too."}},
-        {"app": "google_calendar", "action": "push_event",
-         "params": {"event_ref": "calendar.next_event", "by_minutes": 15}}
-      ]
+      "transcript": "When I say I'm running late, shift my next meeting by 10 mins and email the attendees"
     }
+
+    The AI classifier extracts:
+      - trigger_phrase  (the phrase that fires this workflow later)
+      - steps           (app/action/params for each action)
+    Both are saved to MongoDB and returned.
     """
+    # 1. Classify — runs synchronously against Gemini, off the event loop
+    logger.info("[workflow/create] classifying transcript=%r user=%s",
+                payload.transcript, payload.user_id)
+    try:
+        workflow = await asyncio.to_thread(classify, payload.transcript)
+    except Exception as exc:
+        logger.error("[workflow/create] classify failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=502, detail=f"Classification failed: {exc}")
+
+    # 2. Soft-validate (never blocks — just surfaces errors to the caller)
+    errors = validate(workflow)
+    if errors:
+        logger.warning("[workflow/create] validation errors: %s", errors)
+
+    # 3. Extract what we need to store
+    trigger_phrase = workflow.get("trigger_phrase", "").strip()
+    steps          = workflow.get("steps", [])
+
+    if not trigger_phrase:
+        raise HTTPException(status_code=422, detail="Classifier returned no trigger_phrase")
+
+    # 4. Persist
     workflow_id = await workflow_store.save_workflow(
         user_id=payload.user_id,
-        trigger_phrase=payload.trigger_phrase,
-        steps=payload.steps,
+        trigger_phrase=trigger_phrase,
+        steps=steps,
     )
     logger.info("[workflow/create] saved id=%s trigger=%r user=%s",
-                workflow_id, payload.trigger_phrase, payload.user_id)
-    return {"workflow_id": workflow_id, "status": "saved"}
+                workflow_id, trigger_phrase, payload.user_id)
+
+    return {
+        "workflow_id":       workflow_id,
+        "trigger_phrase":    trigger_phrase,
+        "steps":             steps,
+        "missing_params":    workflow.get("missing_params", []),
+        "confidence":        workflow.get("confidence"),
+        "validation_errors": errors,
+    }
 
 
 # ---------------------------------------------------------------------------

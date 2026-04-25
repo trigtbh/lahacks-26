@@ -2,95 +2,109 @@
 test_running_late.py
 End-to-end test for the "I'm running late" workflow.
 
-Run with the server already started:
-    # terminal 1
-    cd backend && uvicorn main:app --reload
+Prerequisites:
+  - Server running:  cd backend && uvicorn main:app --reload
+  - backend/.env has: GEMINI_API_KEY, MONGO_URL
+  - backend/ has:     token.pickle + credentials.json  (Google OAuth)
 
-    # terminal 2
-    cd backend && python test_running_late.py
+Flow:
+  Step 1 — POST /workflow/create
+           transcript: "When I say I'm running late, shift my next meeting by 10 mins
+                        and email the attendees"
+           → classifier extracts trigger + steps → saved to MongoDB
 
-Step 1  — saves the workflow to MongoDB
-Step 2  — fires it by trigger phrase, executes Gmail + GCal
+  Step 2 — POST /workflow/trigger
+           trigger_phrase: "I'm running late"
+           → MongoDB lookup → executor runs Gmail + GCal → done
 """
 
 import json
 import requests
 
-BASE  = "http://localhost:8000"
-USER  = "test_user"
-
-RUNNING_LATE_WORKFLOW = {
-    "user_id":        USER,
-    "trigger_phrase": "I'm running late",
-    "steps": [
-        {
-            "app":    "gmail",
-            "action": "send_email",
-            "params": {
-                "to":      "calendar.next_event.attendees",
-                "subject": "Running late",
-                "body":    "Hey, I'm running about 15 minutes late for our meeting. Pushing the invite too — sorry!",
-            },
-        },
-        {
-            "app":    "google_calendar",
-            "action": "push_event",
-            "params": {
-                "event_ref":  "calendar.next_event",
-                "by_minutes": 15,
-            },
-        },
-    ],
-}
+BASE = "http://localhost:8000"
+USER = "test_user"
 
 
 def pp(label: str, data: dict) -> None:
-    print(f"\n{'='*55}")
+    print(f"\n{'=' * 55}")
     print(f"  {label}")
-    print(f"{'='*55}")
-    print(json.dumps(data, indent=2, default=str))
+    print(f"{'=' * 55}")
+    # strip audio bytes — too long to print
+    display = {k: (f"<{len(v)} chars>" if k == "audio_b64" and v else v)
+               for k, v in data.items()}
+    print(json.dumps(display, indent=2, default=str))
 
 
-def test_create() -> str:
-    resp = requests.post(f"{BASE}/workflow/create", json=RUNNING_LATE_WORKFLOW)
+# ─────────────────────────────────────────────
+# Step 1 — create workflow from natural language
+# ─────────────────────────────────────────────
+def test_create() -> dict:
+    transcript = (
+        "When I say I'm running late, "
+        "shift my next meeting by 10 mins and email the attendees"
+    )
+    print(f"\nTranscript: {transcript!r}")
+
+    resp = requests.post(f"{BASE}/workflow/create", json={
+        "user_id":    USER,
+        "transcript": transcript,
+    })
     resp.raise_for_status()
     data = resp.json()
-    pp("POST /workflow/create", data)
-    assert data.get("status") == "saved", f"unexpected status: {data}"
-    return data["workflow_id"]
+    pp("POST /workflow/create  (AI classified + saved)", data)
+
+    assert data.get("trigger_phrase"), "No trigger_phrase in response"
+    assert data.get("steps"),          "No steps in response"
+    print(f"\n  trigger_phrase : {data['trigger_phrase']!r}")
+    print(f"  steps ({len(data['steps'])})     :", [f"{s['app']}.{s['action']}" for s in data['steps']])
+    if data.get("validation_errors"):
+        print(f"  validation     : {data['validation_errors']}")
+    return data
 
 
+# ─────────────────────────────────────────────
+# Verify it's in Mongo
+# ─────────────────────────────────────────────
 def test_list() -> None:
     resp = requests.get(f"{BASE}/workflow/list/{USER}")
     resp.raise_for_status()
     data = resp.json()
-    pp(f"GET /workflow/list/{USER}", data)
+    pp(f"GET /workflow/list/{USER}  (verify saved)", data)
 
 
+# ─────────────────────────────────────────────
+# Step 2 — fire the trigger → execute Gmail + GCal
+# ─────────────────────────────────────────────
 def test_trigger() -> None:
+    spoken = "I'm running late"
+    print(f"\nSpoken: {spoken!r}")
+
     resp = requests.post(f"{BASE}/workflow/trigger", json={
         "user_id":        USER,
-        "trigger_phrase": "I'm running late",
+        "trigger_phrase": spoken,
     })
     resp.raise_for_status()
     data = resp.json()
-    # strip audio bytes from print (too long)
-    display = {k: v for k, v in data.items() if k != "audio_b64"}
-    if data.get("audio_b64"):
-        display["audio_b64"] = f"<{len(data['audio_b64'])} chars>"
-    pp("POST /workflow/trigger", display)
-    assert data.get("status") in ("success", "partial"), \
-        f"execution failed: {data}"
+    pp("POST /workflow/trigger  (execute)", data)
+
+    assert data.get("status") != "no_match",  "No matching workflow found in MongoDB"
+    assert data.get("status") in ("success", "partial"), f"Execution failed: {data}"
+    print(f"\n  matched trigger : {data.get('trigger_matched')!r}")
+    print(f"  event affected  : {data.get('event_title')!r}")
+    print(f"  completed       : {[s['step'] for s in data.get('steps_completed', [])]}")
+    if data.get("steps_failed"):
+        print(f"  FAILED          : {data['steps_failed']}")
 
 
+# ─────────────────────────────────────────────
 if __name__ == "__main__":
-    print("Step 1 — create workflow")
-    workflow_id = test_create()
+    print("STEP 1 — Classify transcript + save to MongoDB")
+    test_create()
 
-    print("\nStep 2 — list workflows (verify saved)")
+    print("\nSTEP 2 — Verify it's in MongoDB")
     test_list()
 
-    print("\nStep 3 — trigger workflow (runs Gmail + GCal)")
+    print("\nSTEP 3 — Fire trigger -> execute Gmail + GCal")
     test_trigger()
 
-    print("\n\nAll steps done.")
+    print("\n\nAll done.")
