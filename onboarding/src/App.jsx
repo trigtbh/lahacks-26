@@ -87,31 +87,29 @@ function ThemeRow({ label, k, type, value, onChange }) {
 function WelcomeStep({ userId, setUserId, onNext, theme }) {
   return (
     <div className="page page--welcome">
-      <div className="noise" />
-      <div className="bg-orb bg-orb--1" />
-      <div className="bg-orb bg-orb--2" />
       <div className="welcome-inner">
-        <div className="eyebrow">
-          <span className="brand-mark">◈</span>
-          <span className="eyebrow-text">{theme.appName}</span>
-        </div>
+        <div className="welcome-brand">{theme.appName}</div>
+        <div className="welcome-divider" />
         <h1 className="hero-title">
           Stop doing<br />
-          <span className="hero-gradient">things yourself.</span>
+          <span className="hero-accent">things yourself.</span>
         </h1>
         <p className="hero-sub">{theme.tagline}</p>
         <div className="welcome-form">
           <div className="field">
             <label className="field-label">Your user ID</label>
-            <input className="text-input" value={userId}
+            <input className="text-input w-input" value={userId}
               onChange={e => setUserId(e.target.value)}
               placeholder="akshai" autoFocus />
           </div>
-          <button className="btn-primary" onClick={onNext} disabled={!userId.trim()}>
+          <button className="btn-welcome" onClick={onNext} disabled={!userId.trim()}>
             Get started <span className="arr">→</span>
           </button>
         </div>
         <p className="hint">Select apps · Connect accounts · Start talking</p>
+      </div>
+      <div className="welcome-chad">
+        <img src="/Chad.png" alt="Chad" className="chad-img" />
       </div>
     </div>
   );
