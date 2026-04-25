@@ -1,8 +1,14 @@
 """
-Agentverse integration: agent discovery + message routing.
+Agentverse AI Engine REST API client.
 
-Discovery:  GET https://agentverse.ai/v1/almanac/agents?search=<name>
-Messaging:  local gateway uAgent sends/receives via uAgents protocol
+Community agents are reached via the AI Engine, which handles routing to any
+registered agent by name/description. No uAgents SDK or gateway needed.
+
+Flow per query:
+  1. create_session(user_id)       → session_id
+  2. send_message(session_id, msg) → (no return)
+  3. poll_response(session_id)     → response text
+  4. delete_session(session_id)    → cleanup on disconnect
 """
 
 import asyncio
@@ -11,108 +17,173 @@ import os
 from typing import Optional
 
 import httpx
-from uagents import Agent, Context, Model
 
 logger = logging.getLogger(__name__)
 
-AGENTVERSE_API = "https://agentverse.ai"
 AGENTVERSE_API_KEY = os.environ.get("AGENTVERSE_API_KEY", "")
-
-# ── Message schemas ──────────────────────────────────────────────────────────
-
-class UserQuery(Model):
-    text: str
-    user_id: str
-
-class AgentReply(Model):
-    text: str
-    user_id: str
-
-# ── Gateway agent ────────────────────────────────────────────────────────────
-
-gateway = Agent(
-    name="flux-gateway",
-    seed=os.environ.get("GATEWAY_SEED", "flux-gateway-seed-lahacks-26"),
-    port=8001,
-    endpoint=["http://localhost:8001/submit"],
-)
-
-# Pending futures: user_id -> Future[str]
-_pending: dict[str, asyncio.Future] = {}
+_AI_ENGINE = "https://agentverse.ai/v1beta1/engine/chat"
+_ALMANAC   = "https://agentverse.ai/v1/almanac/agents"
 
 
-@gateway.on_message(model=AgentReply)
-async def _on_reply(ctx: Context, sender: str, msg: AgentReply):
-    future = _pending.pop(msg.user_id, None)
-    if future and not future.done():
-        future.set_result(msg.text)
-        logger.info(f"[gateway] reply from {sender} for user={msg.user_id}: {msg.text!r}")
+def _headers() -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {AGENTVERSE_API_KEY}",
+        "Content-Type": "application/json",
+    }
 
 
-async def send_to_agent(
-    agent_address: str,
-    message: str,
-    user_id: str,
-    timeout: float = 15.0,
-) -> str:
-    """Send a message to an agent and wait for AgentReply."""
-    loop = asyncio.get_event_loop()
-    future: asyncio.Future[str] = loop.create_future()
-    _pending[user_id] = future
+# ── Session lifecycle ─────────────────────────────────────────────────────────
 
-    # gateway.send is non-blocking; the reply comes via _on_reply
-    await gateway.send(agent_address, UserQuery(text=message, user_id=user_id))
-
-    try:
-        return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
-    except asyncio.TimeoutError:
-        _pending.pop(user_id, None)
-        raise TimeoutError(f"No reply from {agent_address} within {timeout}s")
-
-
-# ── Agent discovery ──────────────────────────────────────────────────────────
-
-async def search_agent(name: str) -> list[dict]:
-    """Search Agentverse almanac for agents matching name. Returns list of agent dicts."""
-    headers = {}
-    if AGENTVERSE_API_KEY:
-        headers["Authorization"] = f"Bearer {AGENTVERSE_API_KEY}"
-
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(
-            f"{AGENTVERSE_API}/v1/almanac/agents",
-            params={"search": name},
-            headers=headers,
+async def create_session(user_id: str) -> str:
+    """Open an AI Engine chat session. Returns session_id."""
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            f"{_AI_ENGINE}/sessions",
+            headers=_headers(),
+            json={"email": user_id},
         )
         resp.raise_for_status()
-        data = resp.json()
-        return data.get("agents", data) if isinstance(data, dict) else data
+        return resp.json()["session_id"]
 
 
-async def find_agent_address(name: str) -> Optional[tuple[str, str]]:
+async def send_message(session_id: str, message: str) -> None:
+    """Submit a user message to an existing AI Engine session."""
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            f"{_AI_ENGINE}/sessions/{session_id}/submit",
+            headers=_headers(),
+            json={
+                "session_id": session_id,
+                "payload": {
+                    "type": "user_message",
+                    "user_message": message,
+                },
+            },
+        )
+        resp.raise_for_status()
+
+
+async def poll_response(
+    session_id: str,
+    timeout: float = 30.0,
+    poll_interval: float = 1.5,
+) -> Optional[str]:
     """
-    Find the best matching agent on Agentverse by name.
-    Returns (address, display_name) or None.
+    Poll until the AI Engine returns an agent reply.
+    Returns the response text, or None on timeout.
     """
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        while loop.time() < deadline:
+            resp = await client.get(
+                f"{_AI_ENGINE}/sessions/{session_id}/responses",
+                headers=_headers(),
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            # The API may return a list or {"agent_response": [...]}
+            messages: list = data if isinstance(data, list) else data.get("agent_response", [])
+
+            for msg in messages:
+                kind = msg.get("type") or msg.get("message_type", "")
+                text = (
+                    msg.get("agent_message")
+                    or msg.get("text")
+                    or msg.get("content")
+                    or ""
+                )
+                if kind in ("agent_message", "agent_response") and text:
+                    return text
+                # Some agents signal completion without a message text
+                if kind in ("stop", "end", "agent_confirmation"):
+                    return text or "(done)"
+
+            await asyncio.sleep(poll_interval)
+
+    return None
+
+
+async def delete_session(session_id: str) -> None:
+    """Delete an AI Engine session (best-effort, ignore errors)."""
     try:
-        agents = await search_agent(name)
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.delete(
+                f"{_AI_ENGINE}/sessions/{session_id}",
+                headers=_headers(),
+            )
+    except Exception:
+        pass
+
+
+# ── High-level query helper ───────────────────────────────────────────────────
+
+async def query_agent(
+    message: str,
+    user_id: str,
+    session_id: Optional[str] = None,
+    agent_context: Optional[str] = None,
+    timeout: float = 30.0,
+) -> tuple[str, str]:
+    """
+    Send a message to the AI Engine and return (response_text, session_id).
+
+    Pass the same session_id on follow-up messages to continue the conversation.
+    agent_context is prepended to the first message so the AI Engine knows which
+    agent/service the user wants (e.g. "Caltrain schedule: when is the next train?").
+    """
+    if not AGENTVERSE_API_KEY:
+        return "AGENTVERSE_API_KEY is not set.", session_id or ""
+
+    new_session = session_id is None
+    if new_session:
+        session_id = await create_session(user_id)
+
+    # On a new session, prefix the message with the agent context so the AI
+    # Engine can route to the right registered agent.
+    payload = f"{agent_context}: {message}" if (new_session and agent_context) else message
+
+    await send_message(session_id, payload)
+    response = await poll_response(session_id, timeout=timeout)
+
+    if response is None:
+        response = "The agent didn't respond in time. Try again."
+
+    return response, session_id
+
+
+# ── Agent discovery ───────────────────────────────────────────────────────────
+
+async def search_agent(name: str) -> list[dict]:
+    """Search Agentverse almanac for agents matching name."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                _ALMANAC,
+                params={"search": name},
+                headers=_headers(),
+            )
+            if not resp.is_success:
+                return []
+            data = resp.json()
+            return data.get("agents", data) if isinstance(data, dict) else data
     except Exception as e:
-        logger.error(f"[agentverse] search failed for {name!r}: {e}")
-        return None
-
-    if not agents:
-        return None
-
-    # Pick the first result (closest match)
-    agent = agents[0]
-    address = agent.get("address") or agent.get("agent_address")
-    display_name = agent.get("name") or name
-    return address, display_name
+        logger.error(f"[agentverse] almanac search error: {e}")
+        return []
 
 
-def start_gateway():
-    """Start the gateway agent in a background thread (call once at app startup)."""
-    import threading
-    t = threading.Thread(target=gateway.run, daemon=True)
-    t.start()
-    logger.info(f"[gateway] started — address: {gateway.address}")
+async def find_agent_name(query: str) -> str:
+    """
+    Resolve a user-spoken agent name to a canonical display name.
+    Falls back to the raw query string if the almanac search fails.
+    """
+    agents = await search_agent(query)
+    if agents:
+        return agents[0].get("name") or query
+    return query
+
+
+def start_gateway() -> None:
+    """No-op — gateway replaced by AI Engine REST API."""
