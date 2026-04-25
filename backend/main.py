@@ -96,6 +96,8 @@ async def lifespan(app: FastAPI):
     start_gateway()
     yield
 
+_BASE_DIR = Path(__file__).parent
+
 app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
@@ -116,9 +118,6 @@ recording_store: dict[str, dict] = {}
 class AudioSessionRequest(BaseModel):
     chunk_id: str
     user_id: str
-
-
-_BASE_DIR = Path(__file__).parent
 
 
 @app.get("/")
