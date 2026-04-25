@@ -287,7 +287,8 @@ async def audio_end(payload: AudioSessionRequest):
             "smart_format": True,
             "keywords": ["Flux:2", "workflow:2"],
         }
-        response = await client_deepgram.listen.v1.asyncrest.transcribe_file(
+        response = await asyncio.to_thread(
+            client_deepgram.listen.v1.rest.transcribe_file,
             {"buffer": audio_bytes, "mimetype": mime_type},
             options,
         )
