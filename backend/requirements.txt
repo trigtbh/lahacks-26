@@ -5,8 +5,8 @@ pydantic
 motor
 python-dotenv
 elevenlabs
-deepgram-sdk>=6.0.0
-uagents
+deepgram-sdk>=3.0,<4.0
+uagents>=0.20.0
 httpx
 # Google APIs (Gmail + Calendar)
 google-auth
