@@ -1333,13 +1333,13 @@ async def auth_notion(user_id: str):
         "client_id":     NOTION_CLIENT_ID,
         "response_type": "code",
         "owner":         "user",
-        "redirect_uri":  f"{BACKEND_URL}/connect/notion/redirect",
+        "redirect_uri":  f"{BACKEND_URL}/connect/notion/authorize",
         "state":         user_id,
     }
     return RedirectResponse("https://api.notion.com/v1/oauth/authorize?" + urlencode(params))
 
 
-@app.get("/connect/notion/redirect")
+@app.get("/connect/notion/authorize")
 async def auth_notion_callback(code: str, state: str):
     user_id = state
     credentials = base64.b64encode(f"{NOTION_CLIENT_ID}:{NOTION_CLIENT_SECRET}".encode()).decode()
@@ -1347,7 +1347,7 @@ async def auth_notion_callback(code: str, state: str):
         resp = await client.post(
             "https://api.notion.com/v1/oauth/token",
             headers={"Authorization": f"Basic {credentials}", "Content-Type": "application/json"},
-            json={"grant_type": "authorization_code", "code": code, "redirect_uri": f"{BACKEND_URL}/connect/notion/redirect"},
+            json={"grant_type": "authorization_code", "code": code, "redirect_uri": f"{BACKEND_URL}/connect/notion/authorize"},
         )
     data = resp.json()
     if "access_token" not in data:
