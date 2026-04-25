@@ -88,13 +88,11 @@ function WelcomeStep({ userId, setUserId, onNext, theme }) {
   return (
     <div className="page page--welcome">
       <div className="noise" />
-      <div className="bg-orb bg-orb--1" />
-      <div className="bg-orb bg-orb--2" />
+      <div className="w-orb w-orb--1" />
+      <div className="w-orb w-orb--2" />
+      <div className="w-orb w-orb--3" />
       <div className="welcome-inner">
-        <div className="eyebrow">
-          <span className="brand-mark">◈</span>
-          <span className="eyebrow-text">{theme.appName}</span>
-        </div>
+        <div className="welcome-brand">{theme.appName}</div>
         <h1 className="hero-title">
           Stop doing<br />
           <span className="hero-gradient">things yourself.</span>
@@ -107,7 +105,7 @@ function WelcomeStep({ userId, setUserId, onNext, theme }) {
               onChange={e => setUserId(e.target.value)}
               placeholder="akshai" autoFocus />
           </div>
-          <button className="btn-primary" onClick={onNext} disabled={!userId.trim()}>
+          <button className="btn-welcome" onClick={onNext} disabled={!userId.trim()}>
             Get started <span className="arr">→</span>
           </button>
         </div>
