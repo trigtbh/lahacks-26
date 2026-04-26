@@ -915,72 +915,13 @@ async def audio_end(payload: AudioSessionRequest):
     if workflow_spoken_text:
         user_id = meta["user_id"]
 
-        # ── 1. Disconnect intent ──────────────────────────────────────────────
-        if _DISCONNECT_RE.search(workflow_spoken_text):
-            agent_session = sessions.get_session(user_id)
-            if agent_session:
-                sessions.end_session(user_id)
-                reply = f"Disconnected from {agent_session.agent_name}."
-                audio_b64 = await _tts_pcm(reply)
-                action = "disconnect"
-                agent_name = agent_session.agent_name
-                workflow_response = {
-                    "workflow_status": "agent_disconnect",
-                    "workflow_message": reply,
-                    "audio_b64": audio_b64,
-                }
-                logger.info(f"[audio/end] disconnected from {agent_session.agent_name} user={user_id}")
+        # Connect intent → tell Android to call /workflow/execute "talk to {name}"
+        if raw_name := _parse_connect_intent(workflow_spoken_text):
+            action = "agentverse_search"
+            agent_name = raw_name
+            logger.info(f"[audio/end] connect intent detected name={raw_name!r} user={user_id}")
 
-        # ── 2. Connect intent ("talk to X") ──────────────────────────────────
-        elif raw_name := _parse_connect_intent(workflow_spoken_text):
-            hardcoded = _HARDCODED_AGENTS.get(raw_name.lower())
-            if hardcoded:
-                addr, display_name = hardcoded
-            else:
-                result = await find_agent(raw_name)
-                addr, display_name = result if result else (None, None)
-            if addr:
-                sessions.start_session(user_id, addr, display_name)
-                reply = f"Connected to {display_name}. Go ahead."
-                audio_b64 = await _tts_pcm(reply)
-                action = "connect"
-                agent_name = display_name
-                workflow_response = {
-                    "workflow_status": "agent_connect",
-                    "workflow_message": reply,
-                    "audio_b64": audio_b64,
-                }
-                logger.info(f"[audio/end] connected to {display_name} addr={addr} user={user_id}")
-            else:
-                reply = f"Sorry, I couldn't find an agent named '{raw_name}'."
-                audio_b64 = await _tts_pcm(reply)
-                action = "connect_failed"
-                workflow_response = {
-                    "workflow_status": "agent_connect_failed",
-                    "workflow_message": reply,
-                    "audio_b64": audio_b64,
-                }
-
-        # ── 3. Active agent session → forward to agent ────────────────────────
-        elif agent_session := sessions.get_session(user_id):
-            sessions.append_history(user_id, "user", workflow_spoken_text)
-            try:
-                reply = await send_to_agent(agent_session.agent_address, workflow_spoken_text, user_id)
-            except Exception as e:
-                logger.error(f"[audio/end] agent error: {e}", exc_info=True)
-                reply = "The agent didn't respond. Try again."
-            sessions.append_history(user_id, "agent", reply)
-            audio_b64 = await _tts_pcm(reply)
-            action = "agent_message"
-            agent_name = agent_session.agent_name
-            workflow_response = {
-                "workflow_status": "agent_reply",
-                "workflow_message": reply,
-                "audio_b64": audio_b64,
-            }
-            logger.info(f"[audio/end] agent reply from {agent_session.agent_name}: {reply!r}")
-
-        # ── 4. No agent session → workflow classifier ─────────────────────────
+        # Workflow classifier path
         else:
             explicit_create_request = _is_explicit_workflow_creation_request(workflow_spoken_text)
             pending_confirmation = confirmation_store.get_pending(user_id)
@@ -1104,16 +1045,18 @@ async def workflow_execute(payload: WorkflowRequest):
         return await _respond("connect", [f"Connected to {display_name}"],
                               f"Connected to {display_name}. Go ahead.")
 
-    # 3. Route to active agent session via uAgents gateway
+    # 3. Route to active agent session
     session = sessions.get_session(user_id)
     if session:
-        sessions.append_history(user_id, "user", text)
+        # Strip wake word — Android sends full transcript e.g. "Hey Flux, next train to SF"
+        message = _extract_after_flux(text) or text
+        sessions.append_history(user_id, "user", message)
         try:
-            reply = await send_to_agent(session.agent_address, text, user_id)
+            reply = await send_to_agent(session.agent_address, message, user_id)
         except TimeoutError:
             reply = "The agent didn't respond in time. Try again."
         except Exception as e:
-            logger.error(f"[workflow/execute] gateway error: {e}", exc_info=True)
+            logger.error(f"[workflow/execute] agent error: {e}", exc_info=True)
             reply = "Something went wrong reaching the agent. Try again."
         sessions.append_history(user_id, "agent", reply)
         return await _respond("agent_message", [f"Sent to {session.agent_name}"], reply)
