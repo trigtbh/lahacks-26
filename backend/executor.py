@@ -402,6 +402,32 @@ async def _slack_send(user_id: str, params: dict, action: str) -> None:
     log.info("Slack message sent to %s", channel)
 
 
+async def _slack_get_channels(user_id: str, params: dict) -> list[dict]:
+    doc = await token_store.get_token(user_id, "slack")
+    if not doc:
+        raise ValueError(f"No Slack OAuth token for user '{user_id}' — connect via /auth/slack")
+
+    limit = params.get("limit", 100)
+    
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.get(
+            "https://slack.com/api/conversations.list",
+            headers={"Authorization": f"Bearer {doc['access_token']}"},
+            params={
+                "exclude_archived": "true",
+                "types": "public_channel",
+                "limit": limit
+            }
+        )
+    data = resp.json()
+    if not data.get("ok"):
+        raise ValueError(f"Slack API error: {data.get('error')}")
+        
+    channels = [{"id": c["id"], "name": c["name"]} for c in data.get("channels", [])]
+    log.info("Slack fetched %d channels", len(channels))
+    return channels
+
+
 # ─────────────────────────────────────────────
 # Google Maps handlers
 # ─────────────────────────────────────────────
@@ -565,6 +591,14 @@ async def _flights_search_flights(user_id: str, params: dict) -> dict:
     }
 
 
+async def _google_people_list_connections(user_id: str, params: dict) -> list[dict]:
+    limit = int(params.get("limit", 100))
+    return await google_people.list_connections(user_id, limit)
+
+async def _google_people_search_contacts(user_id: str, params: dict) -> list[dict]:
+    query = params.get("query", "")
+    return await google_people.search_contacts(user_id, query)
+
 # ─────────────────────────────────────────────
 # Action router
 # ─────────────────────────────────────────────
@@ -584,13 +618,16 @@ _OAUTH_HANDLERS: dict[tuple[str, str], Any] = {
     ("google_flights",   "search_flights"):  _flights_search_flights,
     ("dominos",          "order_pizza"):     _dominos_order_pizza,
     ("dominos",          "reorder_last"):    _dominos_reorder_last,
+    ("slack",            "get_channels"):    _slack_get_channels,
+    ("google_people",    "list_connections"): _google_people_list_connections,
+    ("google_people",    "search_contacts"): _google_people_search_contacts,
 }
 
 _SLACK_ACTIONS = {"send_dm", "send_channel"}
 
 
 async def _ensure_app_connection(user_id: str, app: str) -> None:
-    if app in {"gmail", "google_calendar"}:
+    if app in {"gmail", "google_calendar", "google_people"}:
         doc = await token_store.get_token(user_id, "google")
         if not doc:
             raise ValueError(f"Google account not connected for user '{user_id}'")
@@ -621,6 +658,12 @@ def _summarize_step_preview(app: str, action: str, resolved: dict[str, Any]) -> 
         return f"Send a Slack DM to {resolved.get('to', 'someone')}"
     if app == "slack" and action == "send_channel":
         return f"Post in Slack channel {resolved.get('channel', '')}".strip()
+    if app == "slack" and action == "get_channels":
+        return "Fetch a list of all public Slack channels"
+    if app == "google_people" and action == "list_connections":
+        return "Fetch a list of all your contacts"
+    if app == "google_people" and action == "search_contacts":
+        return f"Search your contacts for '{resolved.get('query', '')}'"
     return f"Run {app}.{action}"
 
 

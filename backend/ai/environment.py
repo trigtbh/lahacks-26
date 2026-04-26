@@ -44,6 +44,24 @@ ALLOWED_ACTIONS: dict[str, dict] = {
             "optional": [],
             "description": "Post a message to a Slack channel",
         },
+        "get_channels": {
+            "required": [],
+            "optional": ["limit"],
+            "description": "Get a list of all available public channels in the Slack workspace",
+        },
+    },
+
+    "google_people": {
+        "list_connections": {
+            "required": [],
+            "optional": ["limit"],
+            "description": "List the user's contacts (connections). Read-only.",
+        },
+        "search_contacts": {
+            "required": ["query"],
+            "optional": ["limit"],
+            "description": "Search for a specific contact by name or email. Read-only.",
+        },
     },
 
     "google_calendar": {
@@ -266,6 +284,11 @@ INNATE_ACTIONS: dict[str, dict] = {
         "required": ["message"],
         "optional": ["level"],
         "description": "Write a message to server logs. level: info (default), warning, error.",
+    },
+    "closest_element": {
+        "required": ["items", "target"],
+        "optional": ["key"],
+        "description": "Find the closest element in a list of strings (or dicts) to a target string using fuzzy matching. items is a context ref. key is optional if items is a list of dicts.",
     },
 }
 

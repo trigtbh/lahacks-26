@@ -1361,6 +1361,42 @@ async def auth_notion_callback(code: str, state: str):
     return HTMLResponse(_CONNECTED_HTML.format(service="Notion"))
 
 
+# ── Notion Proxy for 3rd Party Integrations (e.g. Agentverse) ────────────────
+
+@app.get("/notion/oauth/authorize")
+async def notion_proxy_authorize(request: Request):
+    """Proxy authorize URL for 3rd-party platforms."""
+    params = dict(request.query_params)
+    return RedirectResponse("https://api.notion.com/v1/oauth/authorize?" + urlencode(params))
+
+@app.post("/notion/oauth/token")
+async def notion_proxy_token(request: Request):
+    """Proxy token URL that injects Notion's required Basic Auth header."""
+    form = await request.form()
+    data = dict(form)
+    
+    client_id = data.get("client_id", NOTION_CLIENT_ID)
+    client_secret = data.get("client_secret", NOTION_CLIENT_SECRET)
+    
+    credentials = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+    
+    payload = {
+        "grant_type": data.get("grant_type", "authorization_code"),
+        "code": data.get("code"),
+        "redirect_uri": data.get("redirect_uri")
+    }
+    if "refresh_token" in data:
+        payload["refresh_token"] = data["refresh_token"]
+        
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://api.notion.com/v1/oauth/token",
+            headers={"Authorization": f"Basic {credentials}", "Content-Type": "application/json"},
+            json=payload,
+        )
+    return JSONResponse(content=resp.json(), status_code=resp.status_code)
+
+
 # ── Connection status ─────────────────────────────────────────────────────────
 
 @app.get("/user/{user_id}/connections")

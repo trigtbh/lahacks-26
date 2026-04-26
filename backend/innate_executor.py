@@ -220,6 +220,33 @@ async def _log(user_id: str, params: dict, context: dict) -> None:
     )
 
 
+async def _closest_element(user_id: str, params: dict, context: dict) -> Any:
+    import difflib
+    items = _resolve_items(params["items"], context)
+    target = str(params["target"]).lower()
+    key = params.get("key")
+
+    if not items:
+        return None
+
+    best_match = None
+    best_score = -1.0
+
+    for item in items:
+        # Determine the string to compare
+        if key and isinstance(item, dict):
+            val_str = str(item.get(key, "")).lower()
+        else:
+            val_str = str(item).lower()
+
+        score = difflib.SequenceMatcher(None, target, val_str).ratio()
+        if score > best_score:
+            best_score = score
+            best_match = item
+
+    return best_match
+
+
 # ─────────────────────────────────────────────
 # Dispatch
 # ─────────────────────────────────────────────
@@ -240,6 +267,7 @@ _HANDLERS = {
     "wait":          _wait,
     "http_request":  _http_request,
     "log":           _log,
+    "closest_element": _closest_element,
 }
 
 

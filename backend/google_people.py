@@ -14,6 +14,27 @@ from google_auth import get_google_creds
 log = logging.getLogger(__name__)
 
 
+async def list_connections(user_id: str, limit: int = 100) -> list[dict]:
+    """List the user's contacts (connections)."""
+    creds = await get_google_creds(user_id)
+    service = build("people", "v1", credentials=creds)
+
+    result = service.people().connections().list(
+        resourceName="people/me",
+        pageSize=limit,
+        personFields="names,emailAddresses,phoneNumbers"
+    ).execute()
+
+    contacts = []
+    for person in result.get("connections", []):
+        display_name = (person.get("names") or [{}])[0].get("displayName", "")
+        email = (person.get("emailAddresses") or [{}])[0].get("value", "")
+        phone = (person.get("phoneNumbers") or [{}])[0].get("value", "")
+        contacts.append({"name": display_name, "email": email, "phone": phone})
+        
+    log.info("People list_connections → %d result(s)", len(contacts))
+    return contacts
+
 async def search_contacts(user_id: str, name: str) -> list[dict]:
     """
     Search the user's contacts by name via People API searchContacts.
