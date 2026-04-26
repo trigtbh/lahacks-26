@@ -124,6 +124,11 @@ ALLOWED_ACTIONS: dict[str, dict] = {
             "optional": [],
             "description": "Append content to an existing Notion page",
         },
+        "get_page_link": {
+            "required": ["page_ref"],
+            "optional": [],
+            "description": "Get the URL link to a Notion page",
+        },
     },
 
     "github": {

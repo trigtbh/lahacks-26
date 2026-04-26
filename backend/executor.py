@@ -599,6 +599,115 @@ async def _google_people_search_contacts(user_id: str, params: dict) -> list[dic
     query = params.get("query", "")
     return await google_people.search_contacts(user_id, query)
 
+
+# ─────────────────────────────────────────────
+# Notion handlers
+# ─────────────────────────────────────────────
+
+async def _notion_find_page(client: httpx.AsyncClient, query: str) -> dict | None:
+    resp = await client.post("https://api.notion.com/v1/search", json={
+        "query": query,
+        "filter": {"value": "page", "property": "object"},
+        "page_size": 1
+    })
+    resp.raise_for_status()
+    results = resp.json().get("results", [])
+    return results[0] if results else None
+
+async def _notion_get_client(user_id: str) -> httpx.AsyncClient:
+    doc = await token_store.get_token(user_id, "notion")
+    if not doc:
+        raise ValueError(f"No Notion OAuth token for user '{user_id}' — connect via /auth/notion")
+    return httpx.AsyncClient(
+        timeout=_TIMEOUT,
+        headers={
+            "Authorization": f"Bearer {doc['access_token']}",
+            "Notion-Version": "2022-06-28",
+            "Content-Type": "application/json"
+        }
+    )
+
+async def _notion_create_page(user_id: str, params: dict) -> dict:
+    async with await _notion_get_client(user_id) as client:
+        # Determine parent
+        parent = None
+        if params.get("database_id"):
+            parent = {"database_id": params["database_id"]}
+        else:
+            # Find a default page to put it under
+            resp = await client.post("https://api.notion.com/v1/search", json={
+                "filter": {"value": "page", "property": "object"},
+                "page_size": 1
+            })
+            resp.raise_for_status()
+            results = resp.json().get("results", [])
+            if not results:
+                raise ValueError("Could not find a parent page to create the new page under in Notion.")
+            parent = {"page_id": results[0]["id"]}
+
+        payload = {
+            "parent": parent,
+            "properties": {
+                "title": {
+                    "title": [{"text": {"content": params["title"]}}]
+                }
+            }
+        }
+        
+        if params.get("content"):
+            payload["children"] = [{
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [{"type": "text", "text": {"content": params["content"]}}]
+                }
+            }]
+            
+        resp = await client.post("https://api.notion.com/v1/pages", json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+        log.info("Notion page created: %s", data.get("id"))
+        return {"id": data["id"], "url": data.get("url")}
+
+async def _notion_append_to_page(user_id: str, params: dict) -> dict:
+    async with await _notion_get_client(user_id) as client:
+        page_ref = params["page_ref"]
+        if len(page_ref.replace("-", "")) == 32:
+            page_id = page_ref
+        else:
+            page = await _notion_find_page(client, page_ref)
+            if not page:
+                raise ValueError(f"Could not find a Notion page matching '{page_ref}'")
+            page_id = page["id"]
+
+        resp = await client.patch(f"https://api.notion.com/v1/blocks/{page_id}/children", json={
+            "children": [{
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [{"type": "text", "text": {"content": params["content"]}}]
+                }
+            }]
+        })
+        resp.raise_for_status()
+        log.info("Notion content appended to page %s", page_id)
+        return {"status": "appended"}
+
+async def _notion_get_page_link(user_id: str, params: dict) -> str:
+    async with await _notion_get_client(user_id) as client:
+        page_ref = params["page_ref"]
+        if len(page_ref.replace("-", "")) == 32:
+            resp = await client.get(f"https://api.notion.com/v1/pages/{page_ref}")
+            resp.raise_for_status()
+            page = resp.json()
+        else:
+            page = await _notion_find_page(client, page_ref)
+            if not page:
+                raise ValueError(f"Could not find a Notion page matching '{page_ref}'")
+
+        log.info("Notion get_page_link resolved %s -> %s", page_ref, page.get("url"))
+        return page.get("url", "")
+
 # ─────────────────────────────────────────────
 # Action router
 # ─────────────────────────────────────────────
@@ -621,6 +730,9 @@ _OAUTH_HANDLERS: dict[tuple[str, str], Any] = {
     ("slack",            "get_channels"):    _slack_get_channels,
     ("google_people",    "list_connections"): _google_people_list_connections,
     ("google_people",    "search_contacts"): _google_people_search_contacts,
+    ("notion",           "create_page"):     _notion_create_page,
+    ("notion",           "append_to_page"):  _notion_append_to_page,
+    ("notion",           "get_page_link"):   _notion_get_page_link,
 }
 
 _SLACK_ACTIONS = {"send_dm", "send_channel"}
@@ -635,6 +747,10 @@ async def _ensure_app_connection(user_id: str, app: str) -> None:
         doc = await token_store.get_token(user_id, "slack")
         if not doc:
             raise ValueError(f"Slack account not connected for user '{user_id}'")
+    elif app == "notion":
+        doc = await token_store.get_token(user_id, "notion")
+        if not doc:
+            raise ValueError(f"Notion account not connected for user '{user_id}'")
 
 
 # ─────────────────────────────────────────────
@@ -664,6 +780,12 @@ def _summarize_step_preview(app: str, action: str, resolved: dict[str, Any]) -> 
         return "Fetch a list of all your contacts"
     if app == "google_people" and action == "search_contacts":
         return f"Search your contacts for '{resolved.get('query', '')}'"
+    if app == "notion" and action == "create_page":
+        return f"Create Notion page '{resolved.get('title', 'Untitled')}'"
+    if app == "notion" and action == "append_to_page":
+        return f"Append content to Notion page '{resolved.get('page_ref', '')}'"
+    if app == "notion" and action == "get_page_link":
+        return f"Get link for Notion page '{resolved.get('page_ref', '')}'"
     return f"Run {app}.{action}"
 
 
