@@ -227,11 +227,6 @@ async def _filter_list(user_id: str, params: dict, context: dict) -> list:
     return result
 
 
-async def _extract_field(user_id: str, params: dict, context: dict) -> list:
-    items = _resolve_items(params["items"], context)
-    field = str(params["field"])
-    return [i.get(field) if isinstance(i, dict) else None for i in items]
-
 
 async def _slice_list(user_id: str, params: dict, context: dict) -> list:
     items = _resolve_items(params["items"], context)
@@ -329,7 +324,7 @@ _HANDLERS = {
     "join_list":     _join_list,
     "count":         _count,
     "filter_list":   _filter_list,
-    "extract_field": _extract_field,
+
     "slice_list":    _slice_list,
     "merge_text":    _merge_text,
     "wait":          _wait,
