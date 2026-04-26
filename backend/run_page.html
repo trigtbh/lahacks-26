@@ -230,6 +230,44 @@
     border-top: 1px solid var(--border);
     margin: 28px 0;
   }
+
+  details.raw-json {
+    margin-top: 24px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  details.raw-json summary {
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 10px 14px;
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  details.raw-json summary::-webkit-details-marker { display: none; }
+  details.raw-json summary::before {
+    content: '▶';
+    font-size: 9px;
+    transition: transform 0.15s;
+  }
+  details.raw-json[open] summary::before { transform: rotate(90deg); }
+  details.raw-json pre {
+    margin: 0;
+    padding: 14px;
+    background: var(--card);
+    border-top: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--text2);
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-x: auto;
+  }
 </style>
 </head>
 <body>
@@ -271,6 +309,11 @@
     </div>
 
     <div id="result-banner" style="display:none"></div>
+
+    <details class="raw-json" id="raw-json-details" style="display:none">
+      <summary>Raw Gemma Response</summary>
+      <pre id="raw-json-pre"></pre>
+    </details>
   </div>
 </div>
 
@@ -435,6 +478,10 @@ function displayWorkflow(data) {
   renderSteps(data.steps);
   document.getElementById('run-btn').disabled = false;
   setStatus('run-status', '');
+
+  // Raw JSON dropdown
+  document.getElementById('raw-json-pre').textContent = JSON.stringify(data, null, 2);
+  document.getElementById('raw-json-details').style.display = 'block';
 }
 
 async function runWorkflow() {
