@@ -10,6 +10,9 @@ import asyncio
 import logging
 import re
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+_PT = ZoneInfo("America/Los_Angeles")
 from typing import Any
 
 import httpx
@@ -67,12 +70,11 @@ def _resolve_items(items_ref: Any, context: dict) -> list:
 
 async def _get_datetime(user_id: str, params: dict, context: dict) -> str:
     fmt = params.get("format", "iso")
-    tz_name = params.get("timezone", "UTC")
+    tz_name = params.get("timezone", "America/Los_Angeles")
     try:
-        import zoneinfo
-        tz = zoneinfo.ZoneInfo(tz_name)
+        tz = ZoneInfo(tz_name)
     except Exception:
-        tz = timezone.utc
+        tz = _PT
     now = datetime.now(tz)
     if fmt == "human":
         return now.strftime("%A, %B %-d %Y at %-I:%M %p %Z")
@@ -157,7 +159,7 @@ async def _datetime_math(user_id: str, params: dict, context: dict) -> str:
     try:
         base_time = datetime.fromisoformat(base_time_str.replace("Z", "+00:00"))
     except ValueError:
-        base_time = datetime.now(timezone.utc)
+        base_time = datetime.now(_PT)
         
     # Map friendly units to timedelta args
     if unit in ("year", "years"):

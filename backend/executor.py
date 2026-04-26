@@ -13,6 +13,9 @@ import logging
 import os
 import re
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+_PT = ZoneInfo("America/Los_Angeles")
 from email.mime.text import MIMEText
 from typing import Any
 
@@ -60,25 +63,27 @@ def _resolve_static(value: Any) -> Any:
     if not isinstance(value, str):
         return value
     if value == "time.now":
-        return datetime.now(timezone.utc).isoformat()
+        return datetime.now(_PT).isoformat()
     if value.startswith("time.now+") and value.endswith("m"):
         try:
             minutes = int(value[len("time.now+"):-1])
-            return (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat()
+            return (datetime.now(_PT) + timedelta(minutes=minutes)).isoformat()
         except ValueError:
             pass
     if value.startswith("time.now-") and value.endswith("m"):
         try:
             minutes = int(value[len("time.now-"):-1])
-            return (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+            return (datetime.now(_PT) - timedelta(minutes=minutes)).isoformat()
         except ValueError:
             pass
-    # time.today_at:HH:MM  →  today at that hour/minute in UTC, as ISO string
+    # time.today_at:HH:MM — "today" and the clock time are both anchored to PT.
+    # Convert to PT first so that e.g. 3 AM GMT (= previous day in PT) gives the
+    # correct PT calendar date before resolving "9 AM today".
     if value.startswith("time.today_at:"):
         try:
             hh, mm = value[len("time.today_at:"):].split(":")
-            now = datetime.now(timezone.utc)
-            return now.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0).isoformat()
+            now_pt = datetime.now(_PT)
+            return now_pt.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0).isoformat()
         except (ValueError, AttributeError):
             pass
     return value
@@ -193,7 +198,7 @@ async def _resolve_calendar_next_event(user_id: str, resolver_key: str) -> Any:
 
 async def _get_next_event(creds) -> dict | None:
     service = build("calendar", "v3", credentials=creds)
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(_PT).isoformat()
     result = service.events().list(
         calendarId="primary", timeMin=now, maxResults=10,
         singleEvents=True, orderBy="startTime",
@@ -314,8 +319,8 @@ async def _gcal_create_event(user_id: str, params: dict) -> None:
 
     event: dict = {
         "summary": params.get("title", ""),
-        "start": {"dateTime": params["start_time"], "timeZone": "UTC"},
-        "end":   {"dateTime": params["end_time"],   "timeZone": "UTC"},
+        "start": {"dateTime": params["start_time"], "timeZone": "America/Los_Angeles"},
+        "end":   {"dateTime": params["end_time"],   "timeZone": "America/Los_Angeles"},
     }
     if params.get("attendees"):
         attendees = params["attendees"]
