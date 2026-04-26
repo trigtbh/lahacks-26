@@ -6,6 +6,7 @@ and Slack. Other apps fall back to Zapier webhooks.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 import os
@@ -889,7 +890,7 @@ async def _execute_steps(
         label  = f"{app}.{action}"
 
         if event_sink is not None:
-            event_sink.append({"type": "step_start", "label": label})
+            await event_sink.put({"type": "step_start", "label": label})
 
         try:
             # ── Control flow ──────────────────────────────────────────────
@@ -929,13 +930,15 @@ async def _execute_steps(
 
             completed.append({"step": label, "params": resolved, "result": result})
             if event_sink is not None:
-                event_sink.append({"type": "step_done", "label": label, "params": resolved})
+                await event_sink.put({"type": "step_done", "label": label, "params": resolved, "result": result})
+            await asyncio.sleep(1)
 
         except Exception as exc:
             log.error("%s failed: %s", label, exc, exc_info=True)
             failed.append({"step": label, "error": str(exc)})
             if event_sink is not None:
-                event_sink.append({"type": "step_error", "label": label, "error": str(exc)})
+                await event_sink.put({"type": "step_error", "label": label, "error": str(exc)})
+            await asyncio.sleep(1)
 
 
 async def _execute_control(
@@ -990,32 +993,39 @@ async def _execute_control(
 # ─────────────────────────────────────────────
 
 async def execute_workflow_stream(user_id: str, steps: list[dict[str, Any]]):
-    """Async generator yielding SSE-ready dicts as each step executes."""
+    """Async generator yielding SSE-ready dicts live as each step executes."""
     import json as _json
     context: dict = {}
     completed: list = []
     failed: list = []
-    event_sink: list = []
+    queue = asyncio.Queue()
 
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as fallback_client:
-        await _execute_steps(
-            user_id, steps, context, fallback_client, completed, failed, event_sink,
-        )
+    async def run_execution():
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as fallback_client:
+            await _execute_steps(
+                user_id, steps, context, fallback_client, completed, failed, queue,
+            )
+        status = "success" if not failed else ("failed" if not completed else "partial")
+        await queue.put({"type": "done", "status": status})
 
-    # Yield all collected events (event_sink is populated synchronously during execution)
+    # Start the execution in the background
+    asyncio.create_task(run_execution())
+
+    # Stream events as they arrive
     idx = 0
-    for event in event_sink:
-        if event["type"] == "step_start":
+    while True:
+        event = await queue.get()
+        if event["type"] == "done":
+            yield {"type": "done", "status": event["status"]}
+            break
+        elif event["type"] == "step_start":
             yield {"type": "step_start", "index": idx, "label": event["label"]}
         elif event["type"] == "step_done":
-            yield {"type": "step_done", "index": idx, "params": event.get("params", {})}
+            yield {"type": "step_done", "index": idx, "params": event.get("params", {}), "result": event.get("result")}
             idx += 1
         elif event["type"] == "step_error":
             yield {"type": "step_error", "index": idx, "error": event["error"]}
             idx += 1
-
-    status = "success" if not failed else ("failed" if not completed else "partial")
-    yield {"type": "done", "status": status}
 
 
 async def execute_workflow(user_id: str, steps: list[dict[str, Any]]) -> dict[str, Any]:

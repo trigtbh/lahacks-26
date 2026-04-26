@@ -223,7 +223,7 @@ INNATE_ACTIONS: dict[str, dict] = {
     "get_user_info": {
         "required": [],
         "optional": ["field"],
-        "description": "Get user profile data. field: user_id, email, name. Omit for full profile dict.",
+        "description": "Get the user's OWN basic profile data (their own name, email, user_id). Do NOT use this to search for other people's contacts or connections; use the google_people app for that.",
     },
     "set_variable": {
         "required": ["key", "value"],
