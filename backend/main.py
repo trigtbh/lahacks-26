@@ -366,6 +366,14 @@ def _summarize_schema_step(step: dict) -> str:
         return "send a Slack message"
     if app == "slack" and action == "send_channel":
         return "post in Slack"
+    if app == "dominos" and action == "order_pizza":
+        size = params.get("size", "large")
+        toppings = params.get("toppings", [])
+        if isinstance(toppings, list):
+            toppings = ", ".join(toppings) if toppings else "cheese"
+        return f"order a {size} {toppings} pizza from Domino's"
+    if app == "dominos" and action == "reorder_last":
+        return "reorder your last Domino's order"
     return f"run {app}.{action}"
 
 
@@ -573,6 +581,41 @@ async def _prepare_workflow_execution_confirmation(
     )
 
 
+def _build_result_message(result: dict) -> str:
+    for step in result.get("steps_completed", []):
+        label = step.get("step", "")
+        r = step.get("result") or {}
+
+        if "dominos.order_pizza" in label or "dominos.reorder_last" in label:
+            price = r.get("price")
+            placed = r.get("placed", False)
+            store = r.get("storeID", "")
+            price_str = f"${float(price):.2f}" if price else ""
+            if placed and price_str:
+                return f"Your pizza is on its way! Total is {price_str}. Order placed at store {store}."
+            elif placed:
+                return "Your pizza is on its way!"
+            elif price_str:
+                return f"Order priced at {price_str} but payment not processed. Add a card in the Domino's settings."
+            else:
+                return "Pizza order could not be placed. Check your payment info."
+
+        if "slack" in label:
+            return "Slack message sent."
+
+        if "gmail" in label and "send" in label:
+            return "Email sent."
+
+        if "google_calendar" in label:
+            return "Calendar event created."
+
+        if "google_maps" in label:
+            summary = r.get("summary") or r.get("directions") or ""
+            return f"Directions ready. {summary}".strip()
+
+    return "Done."
+
+
 async def _execute_saved_workflow(doc: dict, user_id: str, audit_id: str = "") -> dict:
     workflow_id = str(doc.get("_id", ""))
     logger.info("[audio/workflow] executing id=%s trigger=%r user=%s",
@@ -580,7 +623,7 @@ async def _execute_saved_workflow(doc: dict, user_id: str, audit_id: str = "") -
 
     result = await execute_workflow(user_id, doc["steps"])
     workflow_status = "executed" if result["status"] == "success" else result["status"]
-    workflow_message = "workflow executed" if result["status"] == "success" else result.get("message", "workflow failed")
+    workflow_message = _build_result_message(result) if result["status"] == "success" else result.get("message", "workflow failed")
 
     if audit_id:
         await audit_store.update_audit_record(audit_id, {
