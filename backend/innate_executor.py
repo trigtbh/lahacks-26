@@ -150,7 +150,7 @@ async def _datetime_math(user_id: str, params: dict, context: dict) -> str:
     
     base_time_str = str(params.get("base_time", ""))
     operation = str(params.get("operation", "add")).lower()
-    amount = float(params.get("amount", 0))
+    amount = abs(float(params.get("amount", 0)))  # sign comes from operation, not amount
     unit = str(params.get("unit", "days")).lower()
     fmt = str(params.get("format", "iso")).lower()
     
