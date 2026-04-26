@@ -92,6 +92,13 @@ def _resolve_static(value: Any) -> Any:
 # Matches embedded context references inside a larger string, e.g. "after:context.some_key"
 _INLINE_CONTEXT_RE = re.compile(r'context\.([a-zA-Z_][a-zA-Z0-9_.]*)')
 
+# Matches static resolver keys embedded in a larger string, e.g. "after:time.today_at:09:00"
+_INLINE_RESOLVER_RE = re.compile(
+    r'time\.today_at:\d{2}:\d{2}'   # time.today_at:HH:MM
+    r'|time\.now[+-]\d+m'           # time.now+Xm / time.now-Xm
+    r'|time\.now(?![+-\w])'         # time.now (not followed by + - or word char)
+)
+
 
 def _resolve_context_path(path: str, context: dict) -> Any:
     """Walk a dotted path into the context dict. Returns None if any segment is missing."""
@@ -128,6 +135,11 @@ async def _resolve_params(user_id: str, params: dict, context: dict | None = Non
                 result = _resolve_context_path(m.group(1), context)
                 return str(result) if result is not None else m.group(0)
             value = _INLINE_CONTEXT_RE.sub(_sub_context, value)
+
+        # Inline static resolver keys embedded in a larger string,
+        # e.g. "after:time.today_at:09:00 before:time.today_at:18:00"
+        if isinstance(value, str) and _INLINE_RESOLVER_RE.search(value):
+            value = _INLINE_RESOLVER_RE.sub(lambda m: str(_resolve_static(m.group(0))), value)
 
         if isinstance(value, str):
             if value.startswith("user.contacts.email:"):
