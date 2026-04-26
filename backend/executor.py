@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextvars
 import logging
 import os
 import re
@@ -30,6 +31,12 @@ from ai.environment import ALLOWED_ACTIONS
 _DOMINOS_SERVICE_URL = os.environ.get("DOMINOS_SERVICE_URL", "http://localhost:3001")
 
 log = logging.getLogger(__name__)
+
+# Each handler sets this to the URL it's about to request so it can be
+# surfaced in the step event without changing handler return types.
+_step_request_url: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "_step_request_url", default=None
+)
 
 _TIMEOUT = 10.0
 
@@ -218,7 +225,9 @@ async def _gmail_send_email(user_id: str, params: dict) -> None:
         msg["cc"] = params["cc"] if isinstance(params["cc"], str) else ", ".join(params["cc"])
 
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-    service.users().messages().send(userId="me", body={"raw": raw}).execute()
+    req = service.users().messages().send(userId="me", body={"raw": raw})
+    _step_request_url.set(f"POST {req.uri}")
+    req.execute()
     log.info("Gmail sent to %s", to)
 
 
@@ -235,7 +244,9 @@ async def _gmail_draft_email(user_id: str, params: dict) -> None:
     msg["subject"] = params.get("subject", "(no subject)")
 
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-    service.users().drafts().create(userId="me", body={"message": {"raw": raw}}).execute()
+    req = service.users().drafts().create(userId="me", body={"message": {"raw": raw}})
+    _step_request_url.set(f"POST {req.uri}")
+    req.execute()
     log.info("Gmail draft created for %s", to)
 
 
@@ -284,11 +295,9 @@ async def _gmail_search_email(user_id: str, params: dict) -> list[dict]:
         log.info("Gmail query normalized: %r → %r", raw_query, query)
 
     max_results = int(params.get("max_results", 5))
-    result = service.users().messages().list(
-        userId="me",
-        q=query,
-        maxResults=max_results,
-    ).execute()
+    req = service.users().messages().list(userId="me", q=query, maxResults=max_results)
+    _step_request_url.set(f"GET {req.uri}")
+    result = req.execute()
 
     messages = result.get("messages", [])
     log.info("Gmail search %r → %d result(s)", query, len(messages))
@@ -318,7 +327,9 @@ async def _gcal_create_event(user_id: str, params: dict) -> None:
     if params.get("description"):
         event["description"] = params["description"]
 
-    service.events().insert(calendarId="primary", body=event).execute()
+    req = service.events().insert(calendarId="primary", body=event)
+    _step_request_url.set(f"POST {req.uri}")
+    req.execute()
     log.info("GCal event created: %s", params.get("title"))
 
 
@@ -336,7 +347,9 @@ async def _gcal_push_event(user_id: str, params: dict) -> None:
     event["start"]["dateTime"] = (start_dt + timedelta(minutes=by_minutes)).isoformat()
     event["end"]["dateTime"]   = (end_dt   + timedelta(minutes=by_minutes)).isoformat()
 
-    service.events().update(calendarId="primary", eventId=event["id"], body=event).execute()
+    req = service.events().update(calendarId="primary", eventId=event["id"], body=event)
+    _step_request_url.set(f"PUT {req.uri}")
+    req.execute()
     log.info("GCal event '%s' pushed by %d min", event.get("summary"), by_minutes)
 
 
@@ -348,7 +361,9 @@ async def _gcal_cancel_event(user_id: str, params: dict) -> None:
     if not event:
         raise ValueError("No upcoming timed event found to cancel")
 
-    service.events().delete(calendarId="primary", eventId=event["id"]).execute()
+    req = service.events().delete(calendarId="primary", eventId=event["id"])
+    _step_request_url.set(f"DELETE {req.uri}")
+    req.execute()
     log.info("GCal event '%s' cancelled", event.get("summary"))
 
 
@@ -420,6 +435,7 @@ async def _dominos_order_pizza(user_id: str, params: dict) -> dict:
             "tipAmount":    card.get("tipAmount", 3),
         }
 
+    _step_request_url.set(f"POST {_DOMINOS_SERVICE_URL}/order")
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(f"{_DOMINOS_SERVICE_URL}/order", json=payload)
         resp.raise_for_status()
@@ -458,6 +474,7 @@ async def _slack_send(user_id: str, params: dict, action: str) -> None:
         "as_user": True,
     }
 
+    _step_request_url.set("POST https://slack.com/api/chat.postMessage")
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.post(
             "https://slack.com/api/chat.postMessage",
@@ -477,6 +494,7 @@ async def _slack_get_channels(user_id: str, params: dict) -> list[dict]:
 
     limit = params.get("limit", 100)
     
+    _step_request_url.set("GET https://slack.com/api/conversations.list")
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.get(
             "https://slack.com/api/conversations.list",
@@ -504,6 +522,7 @@ async def _maps_get_directions(user_id: str, params: dict) -> dict:
     api_key = os.environ.get("GOOGLE_MAPS_API_KEY", "")
     if not api_key:
         raise ValueError("GOOGLE_MAPS_API_KEY not configured")
+    _step_request_url.set("GET https://maps.googleapis.com/maps/api/directions/json")
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.get(
             "https://maps.googleapis.com/maps/api/directions/json",
@@ -534,6 +553,7 @@ async def _maps_search_nearby(user_id: str, params: dict) -> list:
     if params.get("location"):
         req["location"] = params["location"]
         req["radius"]   = str(params.get("radius", 1000))
+    _step_request_url.set("GET https://maps.googleapis.com/maps/api/place/textsearch/json")
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.get(
             "https://maps.googleapis.com/maps/api/place/textsearch/json",
@@ -568,7 +588,9 @@ async def _drive_find_file_id(user_id: str, name: str) -> str:
 async def _drive_create_document(user_id: str, params: dict) -> dict:
     creds = await get_google_creds(user_id)
     docs_svc = build("docs", "v1", credentials=creds)
-    doc = docs_svc.documents().create(body={"title": params["title"]}).execute()
+    create_req = docs_svc.documents().create(body={"title": params["title"]})
+    _step_request_url.set(f"POST {create_req.uri}")
+    doc = create_req.execute()
     doc_id = doc["documentId"]
     content = params.get("content", "")
     if content:
@@ -585,11 +607,13 @@ async def _drive_search_files(user_id: str, params: dict) -> list:
     svc = build("drive", "v3", credentials=creds)
     max_results = int(params.get("max_results", 5))
     query = params["query"].replace("'", "\\'")
-    res = svc.files().list(
+    req = svc.files().list(
         q=f"name contains '{query}' and trashed = false",
         pageSize=max_results,
         fields="files(id, name, mimeType, modifiedTime, webViewLink)",
-    ).execute()
+    )
+    _step_request_url.set(f"GET {req.uri}")
+    res = req.execute()
     files = res.get("files", [])
     log.info("Drive search %r → %d results", params["query"], len(files))
     return files
@@ -602,11 +626,13 @@ async def _drive_share_file(user_id: str, params: dict) -> None:
     if not file_id:
         raise ValueError(f"No Drive file found named '{params['file_name']}'")
     role = params.get("role", "reader")
-    svc.permissions().create(
+    perm_req = svc.permissions().create(
         fileId=file_id,
         sendNotificationEmail=True,
         body={"type": "user", "role": role, "emailAddress": params["email"]},
-    ).execute()
+    )
+    _step_request_url.set(f"POST {perm_req.uri}")
+    perm_req.execute()
     log.info("Drive '%s' shared with %s as %s", params["file_name"], params["email"], role)
 
 
@@ -637,6 +663,7 @@ async def _flights_search_flights(user_id: str, params: dict) -> dict:
         req["adults"] = str(params["num_adults"])
     if params.get("cabin_class"):
         req["travel_class"] = _CABIN_CLASS_MAP.get(params["cabin_class"], "1")
+    _step_request_url.set("GET https://serpapi.com/search")
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get("https://serpapi.com/search", params=req)
     data = resp.json()
@@ -731,6 +758,7 @@ async def _notion_create_page(user_id: str, params: dict) -> dict:
                 }
             }]
             
+        _step_request_url.set("POST https://api.notion.com/v1/pages")
         resp = await client.post("https://api.notion.com/v1/pages", json=payload)
         resp.raise_for_status()
         data = resp.json()
@@ -748,6 +776,7 @@ async def _notion_append_to_page(user_id: str, params: dict) -> dict:
                 raise ValueError(f"Could not find a Notion page matching '{page_ref}'")
             page_id = page["id"]
 
+        _step_request_url.set(f"PATCH https://api.notion.com/v1/blocks/{page_id}/children")
         resp = await client.patch(f"https://api.notion.com/v1/blocks/{page_id}/children", json={
             "children": [{
                 "object": "block",
@@ -765,6 +794,7 @@ async def _notion_get_page_link(user_id: str, params: dict) -> str:
     async with await _notion_get_client(user_id) as client:
         page_ref = params["page_ref"]
         if len(page_ref.replace("-", "")) == 32:
+            _step_request_url.set(f"GET https://api.notion.com/v1/pages/{page_ref}")
             resp = await client.get(f"https://api.notion.com/v1/pages/{page_ref}")
             resp.raise_for_status()
             page = resp.json()
@@ -939,6 +969,7 @@ async def _dispatch_step(
     webhook_url = await zapier_store.get_webhook_url(user_id, app, action)
     if not webhook_url:
         raise ValueError(f"No handler or Zapier webhook configured for {app}.{action}")
+    _step_request_url.set(f"POST {webhook_url}")
     resp = await fallback_client.post(webhook_url, json=resolved)
     resp.raise_for_status()
     log.info("Zapier webhook fired for %s.%s → HTTP %s", app, action, resp.status_code)
@@ -963,6 +994,7 @@ async def _execute_steps(
         action = step.get("action", "")
         label  = f"{app}.{action}"
 
+        _step_request_url.set(None)
         if event_sink is not None:
             await event_sink.put({"type": "step_start", "label": label})
 
@@ -1002,9 +1034,10 @@ async def _execute_steps(
             if output_key and result is not None:
                 context[output_key] = result
 
+            request_url = _step_request_url.get()
             completed.append({"step": label, "params": resolved, "result": result})
             if event_sink is not None:
-                await event_sink.put({"type": "step_done", "label": label, "params": resolved, "result": result})
+                await event_sink.put({"type": "step_done", "label": label, "params": resolved, "result": result, "url": request_url})
             await asyncio.sleep(1)
 
         except TokenExpiredError:
@@ -1107,7 +1140,7 @@ async def execute_workflow_stream(user_id: str, steps: list[dict[str, Any]]):
         elif event["type"] == "step_start":
             yield {"type": "step_start", "index": idx, "label": event["label"]}
         elif event["type"] == "step_done":
-            yield {"type": "step_done", "index": idx, "params": event.get("params", {}), "result": event.get("result")}
+            yield {"type": "step_done", "index": idx, "params": event.get("params", {}), "result": event.get("result"), "url": event.get("url")}
             idx += 1
         elif event["type"] == "step_error":
             yield {"type": "step_error", "index": idx, "error": event["error"]}

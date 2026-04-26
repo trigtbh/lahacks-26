@@ -169,6 +169,18 @@
   .param-key { color: var(--muted); }
   .param-val { color: var(--text2); }
 
+  .step-url {
+    font-size: 10px;
+    color: var(--muted);
+    margin-top: 5px;
+    word-break: break-all;
+  }
+  .step-url .method {
+    color: var(--running);
+    font-weight: 700;
+    margin-right: 4px;
+  }
+
   .step-error-msg {
     font-size: 11px;
     color: var(--error);
@@ -328,6 +340,15 @@ function setStepState(index, state, extra) {
   icon.textContent = icons[state];
   if (state === 'done' && extra) {
     const body = card.querySelector('.step-body');
+    if (extra.url) {
+      const existing = body.querySelector('.step-url');
+      const parts = extra.url.match(/^(\S+)\s+(.+)$/);
+      const urlHTML = parts
+        ? `<div class="step-url"><span class="method">${parts[1]}</span>${parts[2]}</div>`
+        : `<div class="step-url">${extra.url}</div>`;
+      if (existing) existing.outerHTML = urlHTML;
+      else body.insertAdjacentHTML('afterbegin', urlHTML);
+    }
     if (extra.params) {
       const existing = body.querySelector('.step-params');
       const newParams = paramsHTML(extra.params);
@@ -457,7 +478,7 @@ async function runWorkflow() {
           setStepState(event.index, 'running');
           setStatus('run-status', `Running step ${event.index + 1} of ${_workflow.steps.length}…`);
         } else if (event.type === 'step_done') {
-          setStepState(event.index, 'done', { params: event.params, result: event.result });
+          setStepState(event.index, 'done', { params: event.params, result: event.result, url: event.url });
           completed++;
         } else if (event.type === 'step_error') {
           setStepState(event.index, 'error', { error: event.error });
