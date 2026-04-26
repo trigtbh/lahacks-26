@@ -1,0 +1,522 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workflow Infer</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:       #080808;
+    --card:     #111;
+    --border:   #1e1e1e;
+    --accent:   #ffffff;
+    --muted:    #555;
+    --success:  #4ade80;
+    --error:    #f87171;
+    --warn:     #facc15;
+    --running:  #60a5fa;
+    --text:     #e8e8e8;
+    --text2:    #999;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 13px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 48px 16px 80px;
+  }
+
+  .page { width: 100%; max-width: 720px; }
+
+  h1 {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 32px;
+  }
+
+  label { display: block; color: var(--muted); font-size: 11px; letter-spacing: 0.06em; margin-bottom: 6px; }
+
+  input, textarea {
+    width: 100%;
+    background: var(--card);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 13px;
+    padding: 10px 12px;
+    border-radius: 6px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  input:focus, textarea:focus { border-color: #333; }
+  textarea { resize: vertical; min-height: 80px; }
+
+  .field { margin-bottom: 16px; }
+
+  button {
+    background: var(--accent);
+    color: #000;
+    border: none;
+    padding: 9px 20px;
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  button:hover { opacity: 0.85; }
+  button:disabled { opacity: 0.35; cursor: not-allowed; }
+
+  .btn-row { display: flex; gap: 10px; align-items: center; margin-top: 4px; }
+
+  .status-msg {
+    font-size: 11px;
+    color: var(--muted);
+    margin-left: 4px;
+  }
+
+  /* ── Workflow preview ── */
+  #workflow-section { margin-top: 36px; }
+
+  .section-title {
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .meta-row {
+    display: flex;
+    gap: 20px;
+    margin-bottom: 18px;
+    flex-wrap: wrap;
+  }
+
+  .meta-item { font-size: 12px; color: var(--text2); }
+  .meta-item strong { color: var(--text); }
+
+  .steps-list { list-style: none; display: flex; flex-direction: column; gap: 8px; }
+
+  .step-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    display: grid;
+    grid-template-columns: 24px 1fr auto;
+    gap: 0 12px;
+    align-items: start;
+    transition: border-color 0.2s;
+  }
+
+  .step-card.running  { border-color: var(--running); }
+  .step-card.done     { border-color: var(--success); }
+  .step-card.error    { border-color: var(--error); }
+  .step-card.no-integration { opacity: 0.5; border-color: var(--error); }
+
+  .step-icon {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: 1.5px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+  .step-icon.pending  { border-color: var(--border); color: var(--muted); }
+  .step-icon.running  { border-color: var(--running); color: var(--running); animation: spin 0.9s linear infinite; }
+  .step-icon.done     { border-color: var(--success); color: var(--success); }
+  .step-icon.error    { border-color: var(--error);   color: var(--error); }
+
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+  }
+
+  .step-body {}
+  .step-label { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+  .step-app   { color: var(--running); }
+  .step-action { color: var(--text); }
+  .step-description { font-size: 11px; color: var(--text2); margin-bottom: 4px; font-style: italic; }
+
+  .step-params {
+    font-size: 11px;
+    color: var(--text2);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    margin-top: 4px;
+  }
+  .param { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 4px; padding: 2px 6px; }
+  .param-key { color: var(--muted); }
+  .param-val { color: var(--text2); }
+
+  .step-error-msg {
+    font-size: 11px;
+    color: var(--error);
+    margin-top: 5px;
+  }
+
+  .step-num {
+    font-size: 10px;
+    color: var(--muted);
+    padding-top: 3px;
+  }
+
+  .badge {
+    font-size: 9px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    border: 1px solid;
+    border-radius: 3px;
+    padding: 1px 5px;
+  }
+  .badge-missing     { color: var(--error); border-color: var(--error); }
+  .badge-connected   { color: var(--success); border-color: var(--success); }
+  .badge-innate      { color: var(--muted); border-color: var(--muted); }
+
+  .warn-box {
+    background: #1a0808;
+    border: 1px solid #7f1d1d;
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 11px;
+    color: var(--error);
+    margin-bottom: 16px;
+  }
+
+  .result-banner {
+    margin-top: 20px;
+    padding: 12px 16px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .result-success { background: #0a1f0f; border: 1px solid #166534; color: var(--success); }
+  .result-partial  { background: #1a1200; border: 1px solid #713f12; color: var(--warn); }
+  .result-failed   { background: #1a0808; border: 1px solid #7f1d1d; color: var(--error); }
+
+  .divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 28px 0;
+  }
+
+  .service-tag {
+    font-size: 10px;
+    background: #0f1f0f;
+    border: 1px solid #1a3a1a;
+    color: var(--success);
+    border-radius: 4px;
+    padding: 3px 7px;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Workflow Infer</h1>
+
+  <div class="field">
+    <label>USER ID</label>
+    <input id="user-id" type="text" placeholder="your-user-id" />
+  </div>
+
+  <div class="field">
+    <label>PROMPT</label>
+    <textarea id="prompt" placeholder="Describe what you want to do…&#10;e.g. Order a pizza and put the order in my calendar"></textarea>
+  </div>
+
+  <div class="btn-row">
+    <button id="generate-btn" onclick="generateWorkflow()">Infer Workflow</button>
+    <span id="gen-status" class="status-msg"></span>
+  </div>
+
+  <div id="workflow-section" style="display:none">
+    <hr class="divider">
+
+    <div class="section-title">Connected Integrations</div>
+    <div id="services-container" style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:24px;"></div>
+
+    <div class="section-title">Inferred Workflow</div>
+
+    <div class="meta-row" id="meta-row"></div>
+
+    <div id="warn-container"></div>
+
+    <ul class="steps-list" id="steps-list"></ul>
+
+    <div class="btn-row" style="margin-top:20px">
+      <button id="run-btn" onclick="runWorkflow()">Execute Workflow</button>
+      <span id="run-status" class="status-msg"></span>
+    </div>
+
+    <div id="result-banner" style="display:none"></div>
+  </div>
+</div>
+
+<script>
+const API = '';  // same origin
+let _workflow = null;
+
+function setStatus(id, msg, color) {
+  const el = document.getElementById(id);
+  el.textContent = msg;
+  el.style.color = color || 'var(--muted)';
+}
+
+function stepIconHTML(state) {
+  const icons = { pending: '○', running: '◌', done: '✓', error: '✕' };
+  return `<div class="step-icon ${state}">${icons[state]}</div>`;
+}
+
+function paramsHTML(params) {
+  if (!params || !Object.keys(params).length) return '';
+  const items = Object.entries(params)
+    .map(([k, v]) => {
+      const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
+      return `<span class="param"><span class="param-key">${k}:</span> <span class="param-val">${val.length > 60 ? val.slice(0, 57) + '…' : val}</span></span>`;
+    })
+    .join('');
+  return `<div class="step-params">${items}</div>`;
+}
+
+function resultHTML(result) {
+  if (result === undefined || result === null || result === "") return '';
+  const val = typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result);
+  return `<div class="step-result" style="margin-top:8px; padding:8px; background:#1a1a1a; border:1px solid #2a2a2a; border-radius:4px; color:var(--text2); font-size:11px; white-space:pre-wrap; word-break:break-word;"><strong>Output:</strong>\n${val}</div>`;
+}
+
+function integrationBadge(step) {
+  if (!step.requires_integration) {
+    return '<span class="badge badge-innate" style="margin-left:8px">innate</span>';
+  }
+  if (step.integration_available === false) {
+    return '<span class="badge badge-missing" style="margin-left:8px">not connected</span>';
+  }
+  return '<span class="badge badge-connected" style="margin-left:8px">connected</span>';
+}
+
+function renderSteps(steps) {
+  const list = document.getElementById('steps-list');
+  list.innerHTML = '';
+  steps.forEach((step, i) => {
+    const unavailable = step.requires_integration && step.integration_available === false;
+    const li = document.createElement('li');
+    li.id = `step-${i}`;
+    li.className = 'step-card' + (unavailable ? ' no-integration' : '');
+    const desc = step.description ? `<div class="step-description">${step.description}</div>` : '';
+    li.innerHTML = `
+      ${stepIconHTML('pending')}
+      <div class="step-body">
+        <div class="step-label">
+          <span class="step-app">${step.app || '?'}</span><span style="color:var(--muted)">.</span><span class="step-action">${step.action || '?'}</span>
+          ${integrationBadge(step)}
+        </div>
+        ${desc}
+        ${paramsHTML(step.params)}
+        <div class="step-error-msg" id="step-err-${i}" style="display:none"></div>
+      </div>
+      <div class="step-num">#${i + 1}</div>
+    `;
+    list.appendChild(li);
+  });
+}
+
+function setStepState(index, state, extra) {
+  const card = document.getElementById(`step-${index}`);
+  if (!card) return;
+  const baseClass = card.className.includes('no-integration') ? 'step-card no-integration' : 'step-card';
+  card.className = baseClass + ' ' + state;
+  const icon = card.querySelector('.step-icon');
+  const icons = { pending: '○', running: '◌', done: '✓', error: '✕' };
+  icon.className = `step-icon ${state}`;
+  icon.textContent = icons[state];
+  if (state === 'done' && extra) {
+    const body = card.querySelector('.step-body');
+    if (extra.params) {
+      const existing = body.querySelector('.step-params');
+      const newParams = paramsHTML(extra.params);
+      if (existing) existing.outerHTML = newParams;
+      else body.insertAdjacentHTML('beforeend', newParams);
+    }
+    if (extra.result !== undefined) {
+      body.insertAdjacentHTML('beforeend', resultHTML(extra.result));
+    }
+  }
+  if (state === 'error' && extra?.error) {
+    const errEl = document.getElementById(`step-err-${index}`);
+    if (errEl) { errEl.textContent = extra.error; errEl.style.display = 'block'; }
+  }
+}
+
+async function generateWorkflow() {
+  const userId = document.getElementById('user-id').value.trim();
+  const prompt = document.getElementById('prompt').value.trim();
+  if (!userId || !prompt) { alert('Fill in both User ID and Prompt.'); return; }
+
+  const btn = document.getElementById('generate-btn');
+  btn.disabled = true;
+  setStatus('gen-status', 'Asking Gemma…');
+  document.getElementById('workflow-section').style.display = 'none';
+  document.getElementById('result-banner').style.display = 'none';
+
+  try {
+    const res = await fetch(`${API}/workflow/infer-preview`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: userId, prompt }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || res.statusText);
+    }
+    const data = await res.json();
+    _workflow = data;
+    displayWorkflow(data);
+    setStatus('gen-status', 'Done.');
+  } catch (e) {
+    setStatus('gen-status', `Error: ${e.message}`, 'var(--error)');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function displayWorkflow(data) {
+  const section = document.getElementById('workflow-section');
+  section.style.display = 'block';
+
+  // Connected services
+  const servicesBox = document.getElementById('services-container');
+  if (data.connected_services && data.connected_services.length) {
+    servicesBox.innerHTML = data.connected_services.map(s =>
+      `<span class="service-tag">${s}</span>`
+    ).join('');
+  } else {
+    servicesBox.innerHTML = '<span style="color:var(--muted); font-size:11px;">No integrations connected</span>';
+  }
+
+  // Meta
+  const meta = document.getElementById('meta-row');
+  const conf = data.confidence != null ? `${Math.round(data.confidence * 100)}%` : '—';
+  const thirdParty = data.involves_third_party ? '<strong style="color:var(--warn)">yes</strong>' : '<strong style="color:var(--success)">no</strong>';
+  meta.innerHTML = `
+    <div class="meta-item"><span style="color:var(--muted)">trigger: </span><strong>${data.trigger_phrase || '(none)'}</strong></div>
+    <div class="meta-item"><span style="color:var(--muted)">steps: </span><strong>${(data.steps || []).length}</strong></div>
+    <div class="meta-item"><span style="color:var(--muted)">confidence: </span><strong>${conf}</strong></div>
+    <div class="meta-item"><span style="color:var(--muted)">3rd party: </span>${thirdParty}</div>
+  `;
+
+  // Warnings for missing integrations
+  const warnBox = document.getElementById('warn-container');
+  warnBox.innerHTML = '';
+  if (data.missing_integrations && data.missing_integrations.length) {
+    warnBox.innerHTML = `<div class="warn-box">Missing integrations: ${data.missing_integrations.join(', ')}</div>`;
+  }
+
+  renderSteps(data.steps || []);
+  document.getElementById('run-btn').disabled = false;
+  setStatus('run-status', '');
+}
+
+async function runWorkflow() {
+  if (!_workflow) return;
+  const userId = document.getElementById('user-id').value.trim();
+  const btn = document.getElementById('run-btn');
+  btn.disabled = true;
+  setStatus('run-status', 'Running…');
+  document.getElementById('result-banner').style.display = 'none';
+
+  // Reset all steps to pending
+  (_workflow.steps || []).forEach((_, i) => setStepState(i, 'pending'));
+
+  let completed = 0, failed = 0;
+
+  try {
+    const res = await fetch(`${API}/workflow/infer-execute-stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: userId, steps: _workflow.steps }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || res.statusText);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const event = JSON.parse(line.slice(6));
+        if (event.type === 'step_start') {
+          setStepState(event.index, 'running');
+          setStatus('run-status', `Running step ${event.index + 1} of ${(_workflow.steps || []).length}…`);
+        } else if (event.type === 'step_done') {
+          setStepState(event.index, 'done', { params: event.params, result: event.result });
+          completed++;
+        } else if (event.type === 'step_error') {
+          setStepState(event.index, 'error', { error: event.error });
+          failed++;
+        } else if (event.type === 'done') {
+          const banner = document.getElementById('result-banner');
+          banner.style.display = 'block';
+          if (failed === 0) {
+            banner.className = 'result-banner result-success';
+            banner.textContent = `✓ All ${completed} step${completed !== 1 ? 's' : ''} completed successfully.`;
+            setStatus('run-status', 'Done.');
+          } else if (completed === 0) {
+            banner.className = 'result-banner result-failed';
+            banner.textContent = `✕ All ${failed} step${failed !== 1 ? 's' : ''} failed.`;
+            setStatus('run-status', 'Failed.', 'var(--error)');
+          } else {
+            banner.className = 'result-banner result-partial';
+            banner.textContent = `⚠ ${completed} completed, ${failed} failed.`;
+            setStatus('run-status', 'Partial.', 'var(--warn)');
+          }
+        }
+      }
+    }
+  } catch (e) {
+    setStatus('run-status', `Error: ${e.message}`, 'var(--error)');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+    if (document.activeElement === document.getElementById('prompt') ||
+        document.activeElement === document.getElementById('user-id')) {
+      generateWorkflow();
+    }
+  }
+});
+</script>
+</body>
+</html>
