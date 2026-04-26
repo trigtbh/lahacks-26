@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Infer</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:      #080808;
+    --card:    #111;
+    --border:  #1e1e1e;
+    --accent:  #ffffff;
+    --muted:   #555;
+    --success: #4ade80;
+    --error:   #f87171;
+    --text:    #e8e8e8;
+    --text2:   #999;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 13px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 48px 16px 80px;
+  }
+
+  .page { width: 100%; max-width: 720px; }
+
+  h1 {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 32px;
+  }
+
+  label { display: block; color: var(--muted); font-size: 11px; letter-spacing: 0.06em; margin-bottom: 6px; }
+
+  input, textarea {
+    width: 100%;
+    background: var(--card);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 13px;
+    padding: 10px 12px;
+    border-radius: 6px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  input:focus, textarea:focus { border-color: #333; }
+  textarea { resize: vertical; min-height: 80px; }
+
+  .field { margin-bottom: 16px; }
+
+  button {
+    background: var(--accent);
+    color: #000;
+    border: none;
+    padding: 9px 20px;
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  button:hover { opacity: 0.85; }
+  button:disabled { opacity: 0.35; cursor: not-allowed; }
+
+  .btn-row { display: flex; gap: 10px; align-items: center; margin-top: 4px; }
+
+  .status-msg { font-size: 11px; color: var(--muted); margin-left: 4px; }
+
+  .divider { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+
+  .section-title {
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 12px;
+  }
+
+  .service-tag {
+    font-size: 10px;
+    background: #0f1f0f;
+    border: 1px solid #1a3a1a;
+    color: var(--success);
+    border-radius: 4px;
+    padding: 3px 7px;
+  }
+
+  #response-box {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    font-size: 13px;
+    color: var(--text);
+    line-height: 1.7;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin-top: 16px;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Infer</h1>
+
+  <div class="field">
+    <label>USER ID</label>
+    <input id="user-id" type="text" placeholder="your-user-id" />
+  </div>
+
+  <div class="field">
+    <label>QUERY</label>
+    <textarea id="prompt" placeholder="Ask anything…&#10;e.g. Does sending a calendar invite involve a third-party integration?"></textarea>
+  </div>
+
+  <div class="btn-row">
+    <button id="ask-btn" onclick="ask()">Ask Gemma</button>
+    <span id="status" class="status-msg"></span>
+  </div>
+
+  <div id="result-section" style="display:none">
+    <hr class="divider">
+
+    <div class="section-title">Connected Services</div>
+    <div id="services-container" style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:24px;"></div>
+
+    <div class="section-title">Response</div>
+    <div id="response-box"></div>
+  </div>
+</div>
+
+<script>
+async function ask() {
+  const userId = document.getElementById('user-id').value.trim();
+  const prompt = document.getElementById('prompt').value.trim();
+  if (!userId || !prompt) { alert('Fill in both User ID and Query.'); return; }
+
+  const btn = document.getElementById('ask-btn');
+  btn.disabled = true;
+  document.getElementById('status').textContent = 'Asking Gemma…';
+  document.getElementById('status').style.color = 'var(--muted)';
+  document.getElementById('result-section').style.display = 'none';
+
+  try {
+    const res = await fetch('/infer/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: userId, prompt }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || res.statusText);
+    }
+    const data = await res.json();
+
+    const servicesBox = document.getElementById('services-container');
+    if (data.connected_services && data.connected_services.length) {
+      servicesBox.innerHTML = data.connected_services.map(s => `<span class="service-tag">${s}</span>`).join('');
+    } else {
+      servicesBox.innerHTML = '<span style="color:var(--muted); font-size:11px;">None</span>';
+    }
+
+    document.getElementById('response-box').textContent = data.response;
+    document.getElementById('result-section').style.display = 'block';
+    document.getElementById('status').textContent = '';
+  } catch (e) {
+    document.getElementById('status').textContent = `Error: ${e.message}`;
+    document.getElementById('status').style.color = 'var(--error)';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+    if (document.activeElement === document.getElementById('prompt') ||
+        document.activeElement === document.getElementById('user-id')) {
+      ask();
+    }
+  }
+});
+</script>
+</body>
+</html>

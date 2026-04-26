@@ -24,7 +24,7 @@ from elevenlabs.client import AsyncElevenLabs
 from deepgram import DeepgramClient, PrerecordedOptions
 
 
-from agentverse_client import find_agent, send_to_agent, start_gateway
+from agentverse_client import find_agent, send_to_agent
 import session_store as sessions
 
 # ── Workflow pipeline ─────────────────────────────────────────────────────────
@@ -179,7 +179,6 @@ def _parse_connect_intent(text: str) -> str | None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    start_gateway()
     yield
 
 _BASE_DIR       = Path(__file__).parent
@@ -427,18 +426,19 @@ async def _classify_workflow_request(user_id: str, transcript: str) -> tuple[dic
     if workflow.get("intent") == "denied":
         reason = workflow.get("denial_reason", "None of your connected apps can handle that request.")
         logger.info("[audio/workflow] denied: %s user=%s", reason, user_id)
-        return {"workflow_status": "denied", "workflow_message": reason}
+        return {"workflow_status": "denied", "workflow_message": reason}, []
+
+    if intent == "other" or not workflow.get("trigger_phrase", "").strip():
+        logger.info("[audio/workflow] not a workflow request user=%s intent=%r", user_id, intent)
+        return {"workflow_status": "not_workflow", "workflow_message": "I didn't understand that as a workflow. Try saying what you want to automate."}, []
 
     validation_errors = validate(workflow)
     if validation_errors:
         logger.warning("[audio/workflow] validation errors: %s", validation_errors)
 
-    trigger_phrase = workflow.get("trigger_phrase", "").strip()
     steps = workflow.get("steps", [])
-    if not trigger_phrase:
-        raise HTTPException(status_code=422, detail="Classifier returned no trigger_phrase")
     if not steps:
-        raise HTTPException(status_code=422, detail="Classifier returned no workflow steps")
+        return {"workflow_status": "not_workflow", "workflow_message": "I couldn't figure out the steps for that workflow."}, []
 
     return workflow, validation_errors
 
@@ -490,6 +490,8 @@ async def _create_workflow_from_transcript(
     force_create: bool = False,
 ) -> dict:
     workflow, validation_errors = await _classify_workflow_request(user_id, transcript)
+    if workflow.get("workflow_status") in ("denied", "not_workflow"):
+        return workflow
     trigger_phrase = workflow.get("trigger_phrase", "").strip()
     steps = workflow.get("steps", [])
 
@@ -1275,6 +1277,37 @@ async def workflow_execute_stream(payload: WorkflowExecuteStreamRequest):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# INFER ENDPOINTS  (/infer page + infer-preview + infer-execute-stream)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/infer", response_class=HTMLResponse)
+async def infer_page():
+    """Serve the integration-aware infer UI."""
+    html_path = _BASE_DIR / "infer_page.html"
+    return HTMLResponse(html_path.read_text())
+
+
+class InferRequest(BaseModel):
+    user_id: str
+    prompt:  str
+
+
+@app.post("/infer/query")
+async def infer_query(payload: InferRequest):
+    """
+    Pass a query to Gemma with the user's connected OAuth services as context.
+    Gemma answers directly — no skill routing, no workflow schema.
+    """
+    from ai.infer_classifier import infer_for_user
+    logger.info("[infer/query] user=%s prompt=%r", payload.user_id, payload.prompt)
+    try:
+        result = await infer_for_user(payload.prompt, payload.user_id)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Inference failed: {exc}")
+    return result
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
