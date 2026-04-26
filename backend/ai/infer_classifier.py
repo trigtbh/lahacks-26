@@ -18,7 +18,7 @@ from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from ai.llm import generate_json, generate_text
+from ai.llm import generate_json, generate_json_coerce, generate_text
 from token_store import list_connections
 
 
@@ -190,7 +190,28 @@ Produce a revised, complete substep plan incorporating those answers.
 Apply the same rules as before: every API substep must map to an exact endpoint from
 the reference, nothing invented, no missing information.
 
-Respond ONLY with valid JSON (no markdown) using the same substeps schema.
+You MUST respond with a single JSON object (not an array). Use exactly this shape:
+{
+  "substeps": [
+    {
+      "index": 1,
+      "description": "short description",
+      "api_call": {
+        "service": "gmail",
+        "method": "POST",
+        "endpoint": "https://...",
+        "params": {}
+      },
+      "needs_clarification": false,
+      "clarification_question": null
+    }
+  ],
+  "has_clarifications": false
+}
+
+If a substep does not involve an API call, set api_call to null.
+If any substep still needs clarification, set has_clarifications to true.
+Do NOT return a bare array — always wrap substeps inside the object above.
 """
 )
 
@@ -259,16 +280,15 @@ async def clarify_for_user(
         f"Q: {q}\nA: {a}" for q, a in clarifications.items()
     )
 
+    user_prompt = (
+        f"Original task: {original_query}\n\n"
+        f"Connected integrations: {', '.join(services)}\n\n"
+        f"Previous substeps:\n{previous_substeps}\n\n"
+        f"User's clarifications:\n{qa_text}"
+    )
+
     plan = await asyncio.to_thread(
-        generate_json,
-        _REPLAN_SYSTEM,
-        (
-            f"Original task: {original_query}\n\n"
-            f"Connected integrations: {', '.join(services)}\n\n"
-            f"Previous substeps:\n{previous_substeps}\n\n"
-            f"User's clarifications:\n{qa_text}"
-        ),
-        0.2,
+        generate_json_coerce, _REPLAN_SYSTEM, user_prompt, "substeps", 0.2
     )
 
     return {
