@@ -1275,55 +1275,29 @@ async def workflow_execute_stream(payload: WorkflowExecuteStreamRequest):
 
 @app.get("/infer", response_class=HTMLResponse)
 async def infer_page():
-    """Serve the integration-aware workflow infer UI."""
+    """Serve the integration-aware infer UI."""
     html_path = _BASE_DIR / "infer_page.html"
     return HTMLResponse(html_path.read_text())
 
 
-class InferPreviewRequest(BaseModel):
+class InferRequest(BaseModel):
     user_id: str
     prompt:  str
 
 
-@app.post("/workflow/infer-preview")
-async def workflow_infer_preview(payload: InferPreviewRequest):
+@app.post("/infer/query")
+async def infer_query(payload: InferRequest):
     """
-    Classify a prompt into a workflow using only the user's connected OAuth services
-    as context — no predefined skill schema.
+    Pass a query to Gemma with the user's connected OAuth services as context.
+    Gemma answers directly — no skill routing, no workflow schema.
     """
     from ai.infer_classifier import infer_for_user
-    logger.info("[workflow/infer-preview] user=%s prompt=%r", payload.user_id, payload.prompt)
+    logger.info("[infer/query] user=%s prompt=%r", payload.user_id, payload.prompt)
     try:
-        workflow = await infer_for_user(payload.prompt, payload.user_id)
+        result = await infer_for_user(payload.prompt, payload.user_id)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Inference failed: {exc}")
-
-    connected = workflow.pop("_connected_services", [])
-
-    return {
-        "trigger_phrase":       workflow.get("trigger_phrase", ""),
-        "steps":                workflow.get("steps", []),
-        "involves_third_party": workflow.get("involves_third_party", False),
-        "missing_integrations": workflow.get("missing_integrations", []),
-        "confidence":           workflow.get("confidence"),
-        "connected_services":   connected,
-    }
-
-
-@app.post("/workflow/infer-execute-stream")
-async def workflow_infer_execute_stream(payload: WorkflowExecuteStreamRequest):
-    """Execute inferred workflow steps, streaming SSE events per step."""
-    import json
-
-    async def event_stream():
-        async for event in execute_workflow_stream(payload.user_id, payload.steps):
-            yield f"data: {json.dumps(event)}\n\n"
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    return result
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
