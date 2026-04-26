@@ -52,7 +52,7 @@ ALLOWED_ACTIONS: dict[str, dict] = {
     },
 
     "google_people": {
-        "list_connections": {
+        "list_contacts": {
             "required": [],
             "optional": ["limit"],
             "description": "List the user's contacts (connections). Read-only.",
@@ -219,11 +219,6 @@ INNATE_ACTIONS: dict[str, dict] = {
         "required": [],
         "optional": ["format", "timezone"],
         "description": "Get current date/time. format: iso (default), human, date_only, time_only.",
-    },
-    "get_user_info": {
-        "required": [],
-        "optional": ["field"],
-        "description": "Get the user's OWN basic profile data (their own name, email, user_id). Do NOT use this to search for other people's contacts or connections; use the google_people app for that.",
     },
     "set_variable": {
         "required": ["key", "value"],
