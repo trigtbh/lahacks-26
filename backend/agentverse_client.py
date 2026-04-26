@@ -36,7 +36,7 @@ async def send_to_agent(
     agent_address: str,
     message: str,
     user_id: str,
-    timeout: float = 60.0,
+    timeout: float = 20.0,
 ) -> str:
     """
     Chat with an Agentverse agent via the ASI:ONE Chat Completions API.
