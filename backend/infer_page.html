@@ -15,6 +15,7 @@
     --muted:   #555;
     --success: #4ade80;
     --error:   #f87171;
+    --warn:    #facc15;
     --text:    #e8e8e8;
     --text2:   #999;
   }
@@ -78,7 +79,6 @@
   button:disabled { opacity: 0.35; cursor: not-allowed; }
 
   .btn-row { display: flex; gap: 10px; align-items: center; margin-top: 4px; }
-
   .status-msg { font-size: 11px; color: var(--muted); margin-left: 4px; }
 
   .divider { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
@@ -88,16 +88,24 @@
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--muted);
-    margin-bottom: 12px;
+    margin-bottom: 10px;
   }
 
-  .service-tag {
+  .tag {
     font-size: 10px;
-    background: #0f1f0f;
-    border: 1px solid #1a3a1a;
-    color: var(--success);
     border-radius: 4px;
     padding: 3px 7px;
+    border: 1px solid;
+  }
+  .tag-connected  { background: #0f1f0f; border-color: #1a3a1a; color: var(--success); }
+  .tag-missing    { background: #1a0808; border-color: #5a1a1a; color: var(--error); }
+  .tag-neutral    { background: #111; border-color: #2a2a2a; color: var(--text2); }
+
+  .integration-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 20px;
   }
 
   #response-box {
@@ -110,8 +118,21 @@
     line-height: 1.7;
     white-space: pre-wrap;
     word-break: break-word;
-    margin-top: 16px;
   }
+
+  .third-party-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    margin-bottom: 20px;
+    padding: 6px 10px;
+    border-radius: 5px;
+    border: 1px solid;
+  }
+  .tpi-yes  { background: #0e1a0e; border-color: #1e3a1e; color: var(--success); }
+  .tpi-no   { background: #111; border-color: #222; color: var(--muted); }
+  .tpi-warn { background: #1a1200; border-color: #3d2f00; color: var(--warn); }
 </style>
 </head>
 <body>
@@ -125,7 +146,7 @@
 
   <div class="field">
     <label>QUERY</label>
-    <textarea id="prompt" placeholder="Ask anything…&#10;e.g. Does sending a calendar invite involve a third-party integration?"></textarea>
+    <textarea id="prompt" placeholder="Ask anything…&#10;e.g. Send an email to my next meeting attendees"></textarea>
   </div>
 
   <div class="btn-row">
@@ -137,7 +158,15 @@
     <hr class="divider">
 
     <div class="section-title">Connected Services</div>
-    <div id="services-container" style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:24px;"></div>
+    <div class="integration-row" id="connected-services"></div>
+
+    <div class="section-title">3rd Party Analysis</div>
+    <div id="tpi-indicator"></div>
+
+    <div id="integrations-section" style="display:none">
+      <div class="section-title">Required Integrations</div>
+      <div class="integration-row" id="required-integrations"></div>
+    </div>
 
     <div class="section-title">Response</div>
     <div id="response-box"></div>
@@ -167,16 +196,7 @@ async function ask() {
       throw new Error(err.detail || res.statusText);
     }
     const data = await res.json();
-
-    const servicesBox = document.getElementById('services-container');
-    if (data.connected_services && data.connected_services.length) {
-      servicesBox.innerHTML = data.connected_services.map(s => `<span class="service-tag">${s}</span>`).join('');
-    } else {
-      servicesBox.innerHTML = '<span style="color:var(--muted); font-size:11px;">None</span>';
-    }
-
-    document.getElementById('response-box').textContent = data.response;
-    document.getElementById('result-section').style.display = 'block';
+    render(data);
     document.getElementById('status').textContent = '';
   } catch (e) {
     document.getElementById('status').textContent = `Error: ${e.message}`;
@@ -184,6 +204,52 @@ async function ask() {
   } finally {
     btn.disabled = false;
   }
+}
+
+function render(data) {
+  // Connected services
+  const connectedBox = document.getElementById('connected-services');
+  if (data.connected_services && data.connected_services.length) {
+    connectedBox.innerHTML = data.connected_services
+      .map(s => `<span class="tag tag-connected">${s}</span>`).join('');
+  } else {
+    connectedBox.innerHTML = '<span style="color:var(--muted);font-size:11px;">None</span>';
+  }
+
+  // 3rd party indicator
+  const tpi = document.getElementById('tpi-indicator');
+  const notConnected = data.not_connected || [];
+  const connected    = data.connected || [];
+  const required     = data.required_integrations || [];
+
+  if (!data.involves_third_party) {
+    tpi.className = 'third-party-indicator tpi-no';
+    tpi.textContent = '— No third-party integration required';
+  } else if (notConnected.length > 0) {
+    tpi.className = 'third-party-indicator tpi-warn';
+    tpi.textContent = `⚠ Requires integrations that are not connected: ${notConnected.join(', ')}`;
+  } else {
+    tpi.className = 'third-party-indicator tpi-yes';
+    tpi.textContent = `✓ Third-party integration required — all connected`;
+  }
+
+  // Required integrations breakdown
+  const intSection = document.getElementById('integrations-section');
+  if (required.length) {
+    intSection.style.display = 'block';
+    document.getElementById('required-integrations').innerHTML = required.map(s => {
+      const isConnected = (data.connected || []).includes(s);
+      const cls = isConnected ? 'tag-connected' : 'tag-missing';
+      const suffix = isConnected ? ' ✓' : ' ✕';
+      return `<span class="tag ${cls}">${s}${suffix}</span>`;
+    }).join('');
+  } else {
+    intSection.style.display = 'none';
+  }
+
+  // Response
+  document.getElementById('response-box').textContent = data.response || '';
+  document.getElementById('result-section').style.display = 'block';
 }
 
 document.addEventListener('keydown', e => {
