@@ -30,6 +30,7 @@ ALLOWED_ACTIONS: dict[str, dict] = {
             "required": ["query"],
             "optional": ["max_results"],
             "description": "Search inbox and return matching emails",
+            "returns": 'list[{"id": str, "threadId": str}] — use context.<key>[N].id or for_each to process results',
         },
     },
 
@@ -48,6 +49,7 @@ ALLOWED_ACTIONS: dict[str, dict] = {
             "required": [],
             "optional": ["limit"],
             "description": "Get a list of all available public channels in the Slack workspace",
+            "returns": 'list[{"id": str, "name": str}] — pass context.<key>[N].id as the channel param to send_channel',
         },
     },
 
@@ -56,11 +58,13 @@ ALLOWED_ACTIONS: dict[str, dict] = {
             "required": [],
             "optional": ["limit"],
             "description": "List the user's contacts (connections). Read-only.",
+            "returns": 'list[{"name": str, "email": str, "phone": str}]',
         },
         "search_contacts": {
             "required": ["query"],
             "optional": ["limit"],
             "description": "Search for a specific contact by name or email. Read-only.",
+            "returns": 'list[{"name": str, "email": str, "phone": str}]',
         },
     },
 
@@ -118,6 +122,7 @@ ALLOWED_ACTIONS: dict[str, dict] = {
             "required": ["title", "content"],
             "optional": ["database_id", "tags"],
             "description": "Create a new Notion page",
+            "returns": '{"id": str, "url": str} — use context.<key>.id as page_ref in append_to_page',
         },
         "append_to_page": {
             "required": ["page_ref", "content"],
@@ -128,6 +133,7 @@ ALLOWED_ACTIONS: dict[str, dict] = {
             "required": ["page_ref"],
             "optional": [],
             "description": "Get the URL link to a Notion page",
+            "returns": "str (URL)",
         },
     },
 
@@ -136,6 +142,7 @@ ALLOWED_ACTIONS: dict[str, dict] = {
             "required": ["repo", "title"],
             "optional": ["body", "assignee", "labels"],
             "description": "Open a new GitHub issue",
+            "returns": '{"number": int, "url": str} — use context.<key>.number as issue_number in assign_issue / comment_on_issue',
         },
         "assign_issue": {
             "required": ["repo", "issue_number", "assignee"],
@@ -154,11 +161,13 @@ ALLOWED_ACTIONS: dict[str, dict] = {
             "required": ["size", "toppings", "address"],
             "optional": ["crust", "quantity", "store_id"],
             "description": "Place a pizza order for delivery",
+            "returns": '{"placed": bool, "storeID": str, "price": str}',
         },
         "reorder_last": {
             "required": [],
             "optional": ["address"],
             "description": "Reorder the user's most recent Domino's order",
+            "returns": '{"placed": bool, "storeID": str, "price": str}',
         },
         "track_order": {
             "required": ["order_id"],
@@ -172,11 +181,13 @@ ALLOWED_ACTIONS: dict[str, dict] = {
             "required": ["destination"],
             "optional": ["origin", "mode"],
             "description": "Get directions to a destination. origin defaults to current location. mode: driving, walking, transit, bicycling.",
+            "returns": '{"distance": str, "duration": str, "summary": str}',
         },
         "search_nearby": {
             "required": ["query"],
             "optional": ["location", "radius"],
             "description": "Search for nearby places by type or keyword (e.g. 'coffee', 'gas station').",
+            "returns": 'list[{"name": str, "address": str, "rating": float}]',
         },
     },
 
@@ -185,6 +196,7 @@ ALLOWED_ACTIONS: dict[str, dict] = {
             "required": ["origin", "destination"],
             "optional": ["departure_date", "return_date", "num_adults", "cabin_class"],
             "description": "Search Google Flights for available flights. origin/destination are airport codes or city names. cabin_class: economy, premium_economy, business, first.",
+            "returns": '{"origin": str, "destination": str, "flights": list[{"price": int, "duration": int, "stops": int, "airline": str}]}',
         },
     },
 
@@ -193,11 +205,13 @@ ALLOWED_ACTIONS: dict[str, dict] = {
             "required": ["title"],
             "optional": ["content"],
             "description": "Create a new Google Doc with a title and optional text content.",
+            "returns": '{"document_id": str, "url": str} — use context.<key>.document_id to reference the doc in later steps',
         },
         "search_files": {
             "required": ["query"],
             "optional": ["max_results"],
             "description": "Search Google Drive for files matching a name or keyword.",
+            "returns": 'list[{"id": str, "name": str, "mimeType": str, "modifiedTime": str, "webViewLink": str}]',
         },
         "share_file": {
             "required": ["file_name", "email"],
@@ -219,11 +233,13 @@ INNATE_ACTIONS: dict[str, dict] = {
         "required": [],
         "optional": ["format", "timezone"],
         "description": "Get current date/time. format: iso (default), human, date_only, time_only.",
+        "returns": "str (ISO-8601 timestamp) — always use output_key and reference as context.<key>",
     },
     "datetime_math": {
         "required": ["base_time", "operation", "amount", "unit"],
         "optional": ["format"],
         "description": "Perform datetime math (e.g. addition, subtraction). base_time: ISO string. operation: 'add' or 'subtract'. unit: 'days', 'hours', 'minutes', etc. Always provide an output_key.",
+        "returns": "str (ISO-8601 timestamp)",
     },
     "set_variable": {
         "required": ["key", "value"],
@@ -234,42 +250,49 @@ INNATE_ACTIONS: dict[str, dict] = {
         "required": ["key"],
         "optional": ["default"],
         "description": "Read a value by key. Checks local context first, then global variables. Returns default if missing.",
+        "returns": "any — the stored value",
     },
     "calculate": {
         "required": ["expression"],
         "optional": [],
         "description": "Evaluate a safe numeric expression. Use {{context.key}} to reference context values. You MUST provide an 'output_key' on this step to save the calculated result.",
+        "returns": "number",
     },
     "format_text": {
         "required": ["template"],
         "optional": [],
         "description": "Render a template string. Use {{context.key}} to interpolate context values.",
+        "returns": "str",
     },
     "join_list": {
         "required": ["items"],
         "optional": ["separator", "final_separator"],
         "description": "Join a context list into a human-readable string. items is a context ref.",
+        "returns": "str",
     },
     "count": {
         "required": ["items"],
         "optional": [],
         "description": "Return the integer length of a context list. items is a context ref.",
+        "returns": "int",
     },
     "filter_list": {
         "required": ["items", "condition"],
         "optional": [],
         "description": "Filter a context list to items matching a condition expression. items is a context ref.",
+        "returns": "list — same element type as the input list",
     },
-
     "slice_list": {
         "required": ["items"],
         "optional": ["start", "end", "limit"],
         "description": "Return a sub-list from a context list. items is a context ref.",
+        "returns": "list — same element type as the input list",
     },
     "merge_text": {
         "required": ["parts"],
         "optional": ["separator"],
         "description": "Concatenate multiple strings. parts is a list of context refs or string literals.",
+        "returns": "str",
     },
     "wait": {
         "required": ["seconds"],
@@ -280,6 +303,7 @@ INNATE_ACTIONS: dict[str, dict] = {
         "required": ["url", "method"],
         "optional": ["headers", "body"],
         "description": "Make a generic HTTP request. method: GET, POST, PUT, PATCH, DELETE.",
+        "returns": "dict (parsed JSON response body)",
     },
     "log": {
         "required": ["message"],
@@ -290,6 +314,7 @@ INNATE_ACTIONS: dict[str, dict] = {
         "required": ["items", "target"],
         "optional": ["key"],
         "description": "Find the closest element in a list of strings (or dicts) to a target string using fuzzy matching. items is a context ref. key is optional if items is a list of dicts.",
+        "returns": "str or dict — the best-matching element from the list",
     },
     "ai_summarize": {
         "required": ["content"],
@@ -427,7 +452,10 @@ def build_system_prompt(allowed_apps: set[str] | None = None) -> str:
     for app, actions in all_actions.items():
         apps_block += f"\n  {app}:\n"
         for action, meta in actions.items():
-            apps_block += f"    - {action}: required={meta['required']}, optional={meta['optional']}\n"
+            line = f"    - {action}: required={meta['required']}, optional={meta.get('optional', [])}"
+            if meta.get("returns"):
+                line += f", returns={meta['returns']}"
+            apps_block += line + "\n"
 
     resolvers_block = "\n".join(
         f"  {key}: {desc}" for key, desc in RESOLVERS.items()
@@ -465,8 +493,22 @@ RESOLVERS (use these keys for dynamic values):
 DATA FLOW:
   Any step may include "output_key": "<identifier>" to store its result in the workflow context.
   Reference stored values in later steps using "context.<identifier>" or "context.<identifier>.<field>".
-  Example: {{"app": "gmail", "action": "search_email", "params": {{}}, "output_key": "emails"}}
-           {{"app": "innate", "action": "count", "params": {{"items": "context.emails"}}, "output_key": "email_count"}}
+  The ALLOWED APPS list above shows the exact "returns" shape for every action that produces output.
+  You MUST use those field names — never guess or invent field names.
+
+  Example — count emails then send a summary:
+    {{"app": "gmail", "action": "search_email", "params": {{"query": "from:boss"}}, "output_key": "emails"}}
+    {{"app": "innate", "action": "count", "params": {{"items": "context.emails"}}, "output_key": "email_count"}}
+    {{"app": "gmail", "action": "send_email", "params": {{"to": "me@example.com", "subject": "Count", "body": "You have context.email_count emails"}}}}
+
+  Example — create a Notion page then share its ID:
+    {{"app": "notion", "action": "create_page", "params": {{"title": "Notes", "content": "..."}}, "output_key": "page"}}
+    {{"app": "notion", "action": "append_to_page", "params": {{"page_ref": "context.page.id", "content": "More text"}}}}
+
+  Example — get Slack channels then post to the first one whose name matches:
+    {{"app": "slack", "action": "get_channels", "params": {{}}, "output_key": "channels"}}
+    {{"app": "innate", "action": "closest_element", "params": {{"items": "context.channels", "target": "general", "key": "name"}}, "output_key": "channel"}}
+    {{"app": "slack", "action": "send_channel", "params": {{"channel": "context.channel.id", "message": "Hello!"}}}}
 
 DATE/TIME PATTERN (always use this when the current date or time is needed):
   Step 1: {{"app": "innate", "action": "get_datetime", "params": {{"format": "iso"}}, "output_key": "now"}}

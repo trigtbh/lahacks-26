@@ -15,7 +15,15 @@
       "Bash(git checkout *)",
       "Bash(git merge *)",
       "Bash(git fetch *)",
-      "Bash(git pull *)"
+      "Bash(git pull *)",
+      "WebFetch(domain:developers.google.com)",
+      "WebFetch(domain:docs.slack.dev)",
+      "WebFetch(domain:developers.notion.com)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/innate_executor.py'\\).read\\(\\)\\); print\\('innate_executor.py OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/ai/environment.py'\\).read\\(\\)\\); print\\('environment.py OK'\\)\")",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)"
     ]
   }
 }
