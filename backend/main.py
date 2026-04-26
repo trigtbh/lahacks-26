@@ -428,6 +428,7 @@ async def _classify_workflow_request(user_id: str, transcript: str) -> tuple[dic
         logger.info("[audio/workflow] denied: %s user=%s", reason, user_id)
         return {"workflow_status": "denied", "workflow_message": reason}, []
 
+    intent = workflow.get("intent")
     if intent == "other" or not workflow.get("trigger_phrase", "").strip():
         logger.info("[audio/workflow] not a workflow request user=%s intent=%r", user_id, intent)
         return {"workflow_status": "not_workflow", "workflow_message": "I didn't understand that as a workflow. Try saying what you want to automate."}, []
@@ -818,6 +819,93 @@ async def audio_end(payload: AudioSessionRequest):
         })
 
     command = _extract_after_flux(transcript)
+    spoken_text = command.strip() or transcript.strip()
+    spoken_clean = spoken_text.rstrip(".!?,;")
+
+    # ── AgentVerse chat routing (takes priority over workflow pipeline) ────────
+
+    # Disconnect intent ends any active agent session
+    if _DISCONNECT_RE.search(spoken_text):
+        av_session = sessions.get_session(meta["user_id"])
+        if av_session:
+            sessions.end_session(meta["user_id"])
+            reply_text = f"Disconnected from {av_session.agent_name}."
+            logger.info(f"[audio/end] agentverse_disconnect agent={av_session.agent_name!r}")
+            return JSONResponse({
+                "chunk_id": chunk_id,
+                "user_id": meta["user_id"],
+                "transcript": transcript,
+                "command": command,
+                "action": "agentverse_disconnect",
+                "agent_name": av_session.agent_name,
+                "reply": reply_text,
+            })
+
+    # "Talk to X" / "Connect to X" — start an AgentVerse session
+    raw_name = _parse_connect_intent(spoken_clean)
+    if raw_name:
+        hardcoded = _HARDCODED_AGENTS.get(raw_name.lower())
+        if hardcoded:
+            av_address, av_display_name = hardcoded
+        else:
+            av_result = await find_agent(raw_name)
+            if not av_result:
+                reply_text = f"Sorry, I couldn't find an agent named '{raw_name}' on Agentverse."
+                logger.info(f"[audio/end] agentverse_connect_failed name={raw_name!r}")
+                return JSONResponse({
+                    "chunk_id": chunk_id,
+                    "user_id": meta["user_id"],
+                    "transcript": transcript,
+                    "command": command,
+                    "action": "agentverse_connect_failed",
+                    "agent_name": raw_name,
+                    "reply": reply_text,
+                })
+            av_address, av_display_name = av_result
+        sessions.start_session(meta["user_id"], av_address, av_display_name)
+        reply_text = f"Connected to {av_display_name}. Go ahead."
+        logger.info(f"[audio/end] agentverse_connect agent={av_display_name!r} addr={av_address} reply={reply_text!r}")
+        return JSONResponse({
+            "chunk_id": chunk_id,
+            "user_id": meta["user_id"],
+            "transcript": transcript,
+            "command": command,
+            "action": "agentverse_connect",
+            "agent_name": av_display_name,
+            "reply": reply_text,
+        })
+
+    # Active agent session — forward every utterance to the agent
+    av_session = sessions.get_session(meta["user_id"])
+    if av_session:
+        try:
+            reply_text = await send_to_agent(av_session.agent_address, spoken_text, meta["user_id"])
+            sessions.append_history(meta["user_id"], "user", spoken_text)
+            sessions.append_history(meta["user_id"], "agent", reply_text)
+            logger.info(f"[audio/end] agentverse_chat agent={av_session.agent_name!r} reply={reply_text!r}")
+            return JSONResponse({
+                "chunk_id": chunk_id,
+                "user_id": meta["user_id"],
+                "transcript": transcript,
+                "command": command,
+                "action": "agentverse_chat",
+                "agent_name": av_session.agent_name,
+                "reply": reply_text,
+            })
+        except Exception as e:
+            logger.error(f"[audio/end] AgentVerse error: {e}", exc_info=True)
+            reply_text = f"Sorry, I had trouble reaching {av_session.agent_name}. Please try again."
+            return JSONResponse({
+                "chunk_id": chunk_id,
+                "user_id": meta["user_id"],
+                "transcript": transcript,
+                "command": command,
+                "action": "agentverse_error",
+                "agent_name": av_session.agent_name,
+                "reply": reply_text,
+            })
+
+    # ── Fall through to workflow pipeline ──────────────────────────────────────
     action = "workflow"
     agent_name = ""
     logger.info(f"[audio/end] command={command!r} user={meta['user_id']}")
