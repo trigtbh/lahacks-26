@@ -260,11 +260,7 @@ INNATE_ACTIONS: dict[str, dict] = {
         "optional": [],
         "description": "Filter a context list to items matching a condition expression. items is a context ref.",
     },
-    "extract_field": {
-        "required": ["items", "field"],
-        "optional": [],
-        "description": "Map over a context list of dicts and return just the named field from each. items is a context ref.",
-    },
+
     "slice_list": {
         "required": ["items"],
         "optional": ["start", "end", "limit"],
@@ -359,8 +355,10 @@ RESOLVERS: dict[str, str] = {
     "user.contacts.email:{name}":       "Look up someone's email by name. Replace {name} with their name.",
 
     # Time
-    "time.now":                         "Current timestamp",
-    "time.now+{minutes}m":              "Current time plus N minutes. Replace {minutes} with a number.",
+    "time.now":                         "Current timestamp (ISO-8601).",
+    "time.now+{minutes}m":              "Current time plus N minutes. Use for relative offsets only (e.g. 'in 30 minutes'). Do NOT use for clock times like '6 AM'.",
+    "time.now-{minutes}m":              "Current time minus N minutes (i.e. N minutes ago). Use for relative offsets only. E.g. time.now-1440m = 24 hours ago.",
+    "time.today_at:{HH}:{MM}":          "Today at a specific clock time (24-hour UTC). Use this for absolute times of day. E.g. time.today_at:06:00 = today at 6 AM, time.today_at:21:00 = today at 9 PM. ALWAYS use this instead of time.now+Xm when the user specifies a clock time.",
 
     # GitHub
     "github.repo.default":              "The user's default/primary GitHub repo",
@@ -475,13 +473,38 @@ DATE/TIME PATTERN (always use this when the current date or time is needed):
   Step 2: use "context.now" wherever the timestamp is needed as a param value.
   Never skip step 1 and never substitute a hardcoded date string for "context.now".
 
-CONTROL FLOW SYNTAX:
-  control.if:
-    {{"app": "control", "action": "if", "condition": "context.count > 0", "then": [...steps...], "else": [...steps...]}}
-  control.while:
+CONTROL FLOW — YOU MUST USE THESE WHEN APPROPRIATE:
+
+  MANDATORY: If the task involves operating on multiple items (multiple people, multiple emails,
+  multiple events, multiple attendees, etc.) you MUST use control.for_each — NOT a flat list of
+  repeated steps. A flat list only works for a fixed, known number of items. Any time the number
+  of items is unknown at design time, for_each is required.
+
+  MANDATORY: If a later step should only run under a certain condition (e.g. "only send email if
+  results were found", "only create event if one doesn't already exist"), you MUST use control.if.
+  Do not silently skip conditional logic.
+
+  USE for_each WHEN:
+    - Sending an email/message TO EACH person in a list
+    - Performing an action on each result from a prior search/list step
+    - Processing each item returned by an API call
+  Syntax:
+    {{"app": "control", "action": "for_each", "items": "context.attendees", "loop_variable": "person", "steps": [
+      {{"app": "gmail", "action": "send_email", "params": {{"to": "context.person.email", "subject": "...", "body": "..."}}}}
+    ]}}
+
+  USE control.if WHEN:
+    - A step should only run if a prior step returned results
+    - Branching on whether a value exists, is empty, or meets a threshold
+  Syntax:
+    {{"app": "control", "action": "if", "condition": "context.results is not None", "then": [...steps...], "else": [...steps...]}}
+
+  USE control.while WHEN:
+    - Retrying until a condition is met
+    - Polling for a state change
+  Syntax:
     {{"app": "control", "action": "while", "condition": "context.retries < 3", "steps": [...steps...], "max_iterations": 20}}
-  control.for_each:
-    {{"app": "control", "action": "for_each", "items": "context.email_list", "loop_variable": "item", "steps": [...steps...]}}
+
   Conditions may reference context keys: context.count > 0 | context.status == "ok" | context.found is not None
 
 OUTPUT SCHEMA:

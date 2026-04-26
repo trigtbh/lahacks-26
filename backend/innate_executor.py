@@ -10,6 +10,9 @@ import asyncio
 import logging
 import re
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+_PT = ZoneInfo("America/Los_Angeles")
 from typing import Any
 
 import httpx
@@ -67,12 +70,11 @@ def _resolve_items(items_ref: Any, context: dict) -> list:
 
 async def _get_datetime(user_id: str, params: dict, context: dict) -> str:
     fmt = params.get("format", "iso")
-    tz_name = params.get("timezone", "UTC")
+    tz_name = params.get("timezone", "America/Los_Angeles")
     try:
-        import zoneinfo
-        tz = zoneinfo.ZoneInfo(tz_name)
+        tz = ZoneInfo(tz_name)
     except Exception:
-        tz = timezone.utc
+        tz = _PT
     now = datetime.now(tz)
     if fmt == "human":
         return now.strftime("%A, %B %-d %Y at %-I:%M %p %Z")
@@ -149,15 +151,15 @@ async def _datetime_math(user_id: str, params: dict, context: dict) -> str:
     from datetime import timedelta
     
     base_time_str = str(params.get("base_time", ""))
-    operation = str(params.get("operation", "add")).lower()
-    amount = float(params.get("amount", 0))
-    unit = str(params.get("unit", "days")).lower()
-    fmt = str(params.get("format", "iso")).lower()
+    operation = str(params.get("operation", "add")).lower().strip()
+    amount = abs(float(params.get("amount", 0)))  # sign comes from operation, not amount
+    unit = str(params.get("unit", "days")).lower().strip()
+    fmt = str(params.get("format", "iso")).lower().strip()
     
     try:
         base_time = datetime.fromisoformat(base_time_str.replace("Z", "+00:00"))
     except ValueError:
-        base_time = datetime.now(timezone.utc)
+        base_time = datetime.now(_PT)
         
     # Map friendly units to timedelta args
     if unit in ("year", "years"):
@@ -174,8 +176,16 @@ async def _datetime_math(user_id: str, params: dict, context: dict) -> str:
         delta = timedelta(seconds=amount)
     else:
         delta = timedelta(days=amount)
+
+    # Robust subtract detection: the LLM may send "subtract", "sub", "minus",
+    # "-", "–" (en-dash), "—" (em-dash), "−" (Unicode minus U+2212), etc.
+    _SUBTRACT_TOKENS = {
+        "subtract", "sub", "minus", "-", "–", "—", "−",
+        "before", "ago", "back", "earlier",
+    }
+    is_subtract = operation in _SUBTRACT_TOKENS
         
-    if operation == "subtract":
+    if is_subtract:
         result_time = base_time - delta
     else:
         result_time = base_time + delta
@@ -218,11 +228,6 @@ async def _filter_list(user_id: str, params: dict, context: dict) -> list:
             result.append(item)
     return result
 
-
-async def _extract_field(user_id: str, params: dict, context: dict) -> list:
-    items = _resolve_items(params["items"], context)
-    field = str(params["field"])
-    return [i.get(field) if isinstance(i, dict) else None for i in items]
 
 
 async def _slice_list(user_id: str, params: dict, context: dict) -> list:
@@ -332,7 +337,7 @@ _HANDLERS = {
     "join_list":     _join_list,
     "count":         _count,
     "filter_list":   _filter_list,
-    "extract_field": _extract_field,
+
     "slice_list":    _slice_list,
     "merge_text":    _merge_text,
     "wait":          _wait,

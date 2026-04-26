@@ -14,7 +14,7 @@ Uses the Chat Protocol so it works with ASI:One and our gateway.
 import os
 import uuid
 import logging
-import httpx
+import requests
 from datetime import datetime, timezone
 
 from uagents import Agent, Context
@@ -68,7 +68,7 @@ proto = AgentQuotaProtocol(
 )
 
 
-async def _next_departures(query: str) -> str:
+def _next_departures(query: str) -> str:
     """Parse stop from query and fetch next departures via 511 API."""
     query_lower = query.lower()
 
@@ -89,23 +89,23 @@ async def _next_departures(query: str) -> str:
         return "511 API key not configured — ask your administrator to set SF_511_API_KEY."
 
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(
-                f"{SF_511_BASE}/StopMonitoring",
-                params={
-                    "api_key": SF_511_API_KEY,
-                    "agency":  "CT",
-                    "stopCode": origin_code,
-                    "format":  "json",
-                },
-            )
-            resp.raise_for_status()
-            visits = (
-                resp.json()
-                    .get("ServiceDelivery", {})
-                    .get("StopMonitoringDelivery", {})
-                    .get("MonitoredStopVisit", [])
-            )
+        resp = requests.get(
+            f"{SF_511_BASE}/StopMonitoring",
+            params={
+                "api_key": SF_511_API_KEY,
+                "agency":  "CT",
+                "stopCode": origin_code,
+                "format":  "json",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        visits = (
+            resp.json()
+                .get("ServiceDelivery", {})
+                .get("StopMonitoringDelivery", {})
+                .get("MonitoredStopVisit", [])
+        )
         if not visits:
             return "No upcoming Caltrain departures found. Service may be suspended."
 
@@ -134,7 +134,7 @@ async def handle_message(ctx: Context, sender: str, msg: ChatMessage) -> None:
     text = next((c.text for c in msg.content if isinstance(c, TextContent)), "").strip()
     logger.info(f"[caltrain] from {sender}: {text!r}")
 
-    reply_text = await _next_departures(text) if text else (
+    reply_text = _next_departures(text) if text else (
         "Ask me about Caltrain departures — e.g. 'next train to SF'."
     )
 
@@ -149,6 +149,3 @@ async def handle_message(ctx: Context, sender: str, msg: ChatMessage) -> None:
 
 
 agent.include(proto, publish_manifest=True)
-
-if __name__ == "__main__":
-    agent.run()

@@ -115,6 +115,50 @@ def generate_json(
     return parsed
 
 
+def generate_json_coerce(
+    system_instruction: str,
+    user_prompt: str,
+    list_key: str,
+    temperature: float = 0.2,
+) -> dict[str, Any]:
+    """
+    Like generate_json but tolerates a bare JSON array response by wrapping it
+    in { list_key: <array>, "has_clarifications": false }.
+    Use this when the LLM is known to sometimes return a list instead of an object.
+    """
+    model = _get_model()
+
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": system_instruction},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=temperature,
+    )
+
+    raw = response.choices[0].message.content or ""
+    raw = _strip_fences(raw)
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f"LLM ({model}) returned unparseable JSON: {e.msg} at pos {e.pos}\n"
+            f"--- raw response ---\n{raw}\n--- end ---"
+        ) from e
+
+    if isinstance(parsed, list):
+        return {list_key: parsed, "has_clarifications": False}
+
+    if not isinstance(parsed, dict):
+        raise ValueError(
+            f"LLM ({model}) returned JSON of type {type(parsed).__name__}, "
+            f"expected object."
+        )
+    return parsed
+
+
 def generate_text(
     system_instruction: str,
     user_prompt: str,
