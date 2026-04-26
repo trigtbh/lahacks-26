@@ -1,150 +1,73 @@
 """
-Agentverse integration: agent discovery + uAgents gateway messaging.
+Agentverse integration: agent discovery + ASI:ONE chat completions.
 
 Discovery:  POST https://agentverse.ai/v1/search/agents
-Messaging:  local gateway uAgent communicates via uAgents protocol
+Messaging:  POST https://api.asi1.ai/v1/chat/completions  (agent_address field)
 
-Cross-loop bridge pattern:
-  - gateway.run() spins its own asyncio loop in a daemon thread
-  - outgoing messages go through a stdlib queue.Queue (thread-safe)
-  - on_interval drains the queue and calls ctx.send() inside gateway's loop
-  - replies come back via on_message; delivered to FastAPI's loop via
-    _fastapi_loop.call_soon_threadsafe(future.set_result, text)
+Both APIs use the same AGENTVERSE_API_KEY Bearer token.
 """
 
-import asyncio
 import logging
 import os
-import queue
-import threading
-import uuid
-from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
-from uagents import Agent, Context, Model
 
 logger = logging.getLogger(__name__)
 
 AGENTVERSE_API_KEY = os.environ.get("AGENTVERSE_API_KEY", "")
 _SEARCH_URL = "https://agentverse.ai/v1/search/agents"
+_ASI1_CHAT_URL = "https://api.asi1.ai/v1/chat/completions"
 
 
-def _auth_headers() -> dict[str, str]:
-    return {
+def _auth_headers(session_id: Optional[str] = None) -> dict[str, str]:
+    headers = {
         "Authorization": f"Bearer {AGENTVERSE_API_KEY}",
         "Content-Type": "application/json",
     }
+    if session_id:
+        headers["x-session-id"] = session_id
+    return headers
 
 
-# ── Message models ────────────────────────────────────────────────────────────
-
-class TextContent(Model):
-    type: str
-    text: str
-
-class ChatMessage(Model):
-    timestamp: str
-    msg_id: str
-    content: list[TextContent]
-
-class ChatAcknowledgement(Model):
-    timestamp: str
-    acknowledged_msg_id: str
-
-
-# ── Cross-loop state ──────────────────────────────────────────────────────────
-
-_outgoing: queue.Queue = queue.Queue()          # (address, text, user_id) — thread-safe
-_pending: dict[str, asyncio.Future] = {}        # user_id → Future (lives in FastAPI's loop)
-_agent_to_user: dict[str, str] = {}             # agent_address → user_id
-_fastapi_loop: Optional[asyncio.AbstractEventLoop] = None
-
-
-def _resolve(user_id: str, text: str) -> None:
-    """Thread-safely deliver a reply to the waiting Future in FastAPI's loop."""
-    future = _pending.pop(user_id, None)
-    if future and _fastapi_loop and not future.done():
-        _fastapi_loop.call_soon_threadsafe(future.set_result, text)
-
-
-# ── Gateway agent ─────────────────────────────────────────────────────────────
-
-gateway = Agent(
-    name="flux-gateway",
-    seed=os.environ.get("GATEWAY_SEED", "flux-gateway-seed-lahacks-26"),
-    port=8001,
-    mailbox=True,
-    loop=asyncio.new_event_loop(),
-)
-
-
-@gateway.on_interval(period=0.1)
-async def _flush_outgoing(ctx: Context) -> None:
-    """Drain the outgoing queue and send ChatMessage. Runs in gateway's loop."""
-    while True:
-        try:
-            address, text, user_id = _outgoing.get_nowait()
-        except queue.Empty:
-            break
-
-        msg = ChatMessage(
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            msg_id=str(uuid.uuid4()),
-            content=[TextContent(type="text", text=text)],
-        )
-        _agent_to_user[address] = user_id
-        logger.info(f"[gateway] sent ChatMessage to {address} user={user_id}")
-        await ctx.send(address, msg)
-
-
-@gateway.on_message(model=ChatAcknowledgement)
-async def _on_ack(ctx: Context, sender: str, msg: ChatAcknowledgement) -> None:
-    logger.info(f"[gateway] ChatAck from {sender} ack={msg.acknowledged_msg_id}")
-
-
-@gateway.on_message(model=ChatMessage)
-async def _on_chat_message(ctx: Context, sender: str, msg: ChatMessage) -> None:
-    text = next((c.text for c in msg.content if c.type == "text" and c.text), "")
-    user_id = _agent_to_user.pop(sender, None)
-    logger.info(f"[gateway] ChatMessage from {sender} user={user_id}: {text!r}")
-    if user_id:
-        _resolve(user_id, text)
-
-
-def start_gateway() -> None:
-    """
-    Capture FastAPI's running event loop, then start the gateway in a daemon
-    thread. Must be called from inside an async context (e.g. FastAPI lifespan).
-    """
-    global _fastapi_loop
-    _fastapi_loop = asyncio.get_running_loop()
-    t = threading.Thread(target=gateway.run, daemon=True, name="uagents-gateway")
-    t.start()
-    logger.info(f"[gateway] started — address: {gateway.address}")
-
+# ── Agent messaging via ASI:ONE ───────────────────────────────────────────────
 
 async def send_to_agent(
     agent_address: str,
     message: str,
     user_id: str,
-    timeout: float = 20.0,
+    timeout: float = 60.0,
 ) -> str:
     """
-    Enqueue a ChatMessage for an agent and await the reply.
-    Safe to call from FastAPI's async context.
+    Chat with an Agentverse agent via the ASI:ONE Chat Completions API.
+    Uses user_id as the session ID to persist conversation context across calls.
     """
-    loop = asyncio.get_running_loop()
-    future: asyncio.Future[str] = loop.create_future()
-    _pending[user_id] = future
-    _outgoing.put_nowait((agent_address, message, user_id))
+    if not AGENTVERSE_API_KEY:
+        raise RuntimeError("AGENTVERSE_API_KEY not set")
 
+    payload = {
+        "model": "asi1",
+        "agent_address": agent_address,
+        "messages": [{"role": "user", "content": message}],
+    }
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.post(
+            _ASI1_CHAT_URL,
+            headers=_auth_headers(session_id=user_id),
+            json=payload,
+        )
+
+    if not resp.is_success:
+        logger.error(f"[asi1] {resp.status_code}: {resp.text[:300]}")
+        raise RuntimeError(f"ASI:ONE API error {resp.status_code}: {resp.text[:200]}")
+
+    data = resp.json()
     try:
-        return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
-    except asyncio.TimeoutError:
-        _pending.pop(user_id, None)
-        _agent_to_user.pop(agent_address, None)
-        raise TimeoutError(f"No reply from {agent_address} within {timeout}s")
+        return data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError) as e:
+        logger.error(f"[asi1] unexpected response shape: {data}")
+        raise RuntimeError(f"Unexpected ASI:ONE response: {e}") from e
 
 
 # ── Known agents ──────────────────────────────────────────────────────────────
