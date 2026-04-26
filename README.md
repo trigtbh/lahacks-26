@@ -1,6 +1,6 @@
-# barelyatwork ⚡
+# BarelyAtWork 
 
-> **Voice-powered AI automation engine.** Speak a command, Chad builds and executes a multi-app workflow — in real time.
+> **Voice-powered AI automation engine.** Speak a command, Chad builds and executes a multi-app workflow - in real time.
 
 Built at **LA Hacks 2026** in 36 hours.
 
@@ -8,7 +8,7 @@ Built at **LA Hacks 2026** in 36 hours.
 
 ## What It Does
 
-Say *"Hey Chad, when I'm running late, message my team on Slack, push my next meeting by 30 minutes, and order a Domino's pizza to the office"* — and Chad:
+Say *"Hey Chad, when I'm running late, message my team on Slack, push my next meeting by 30 minutes, and order a Domino's pizza to the office"*. Chad:
 
 1. Transcribes your voice (Deepgram Nova-3)
 2. Classifies intent and constructs a validated workflow (Gemma-4-26B via OpenRouter)
@@ -144,10 +144,10 @@ Voice Input
 Deepgram STT → transcript
     │
     ▼
-Classifier (Gemma-4) ──builds──▶ Workflow JSON
+Classifier (Gemma-4) ── builds──▶ Workflow JSON
     │                              {intent, trigger_phrase, steps[]}
     ▼
-Validator ──if broken──▶ Repair (LLM retry ×2)
+Validator ── if broken──▶ Repair (LLM retry ×2)
     │
     ▼
 User Confirmation ("Say yes to confirm")
@@ -187,43 +187,6 @@ A step looks like:
 | **Google Maps** | directions, nearby search |
 | **Google Contacts** | list, search by name |
 | **Domino's** | order pizza, reorder last |
-| **AgentVerse** | discover and chat with any AI agent |
-| **Zapier Webhooks** | custom app fallback |
-| _Stubbed_ | GitHub, Spotify, Uber |
-
----
-
-## API Endpoints
-
-```
-POST /audio/start          Open recording session
-POST /audio/stream         Append audio chunk
-POST /audio/end            Transcribe + classify + respond
-
-POST /workflow/create      Classify → persist workflow
-POST /workflow/trigger     Fire workflow by trigger phrase
-POST /workflow/execute     Route text → agent or built-in
-POST /workflow/execute-stream   SSE streaming execution
-GET  /workflow/list/{user_id}   All saved workflows
-DELETE /workflow/{id}
-
-GET  /auth/google          Initiate Google OAuth
-GET  /auth/slack           Initiate Slack OAuth
-GET  /auth/notion          Initiate Notion OAuth
-GET  /user/{id}/connections    Connected services
-
-POST /user/{id}/webhooks   Register Zapier webhook
-POST /user/{id}/credentials/dominos
-
-GET  /audit/{user_id}      Execution audit trail
-POST /infer/query          Multi-step task planning
-```
-
----
-
-## Team
-
-Built in 36 hours at **LA Hacks 2026**.
 
 ---
 
