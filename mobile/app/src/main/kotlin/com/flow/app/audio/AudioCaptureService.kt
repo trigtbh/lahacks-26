@@ -39,12 +39,12 @@ class AudioCaptureService : Service() {
         const val EXTRA_USER_ID = "user_id"
         private const val CHANNEL_ID = "flow_listening"
         private const val NOTIF_ID = 1
-        private val MIN_SPEECH_RMS: Double get() = BuildConfig.VAD_MIN_SPEECH_RMS
+        private val MIN_SPEECH_RMS = BuildConfig.VAD_MIN_SPEECH_RMS
         private const val MIN_SILENCE_RMS = 12.0
         private const val SPEECH_START_MULTIPLIER = 1.35
         private const val SPEECH_END_MULTIPLIER = 1.05
-        private val MIN_SPEECH_DELTA: Double get() = BuildConfig.VAD_MIN_SPEECH_DELTA
-        private val START_TRIGGER_CHUNKS: Int get() = BuildConfig.VAD_START_TRIGGER_CHUNKS
+        private val MIN_SPEECH_DELTA = BuildConfig.VAD_MIN_SPEECH_DELTA
+        private val START_TRIGGER_CHUNKS = BuildConfig.VAD_START_TRIGGER_CHUNKS
         private const val SILENCE_TIMEOUT_MS = 900L
         private const val MIN_UTTERANCE_MS = 700L
         private const val PRE_ROLL_MS = 500L
@@ -173,13 +173,9 @@ class AudioCaptureService : Service() {
                                     for (payload in channel) {
                                         apiClient.streamAudioChunk(payload, userId, newChunkId)
                                             .onFailure { err ->
-                                                Log.e(
+                                                Log.w(
                                                     "Flux/Stream",
-                                                    "chunkId=$newChunkId bytes=${payload.size} failed",
-                                                    err
-                                                )
-                                                FluxEvents.emitError(
-                                                    "Chunk upload failed for $newChunkId: ${err.message ?: "unknown error"}"
+                                                    "chunkId=$newChunkId bytes=${payload.size} failed (non-fatal): ${err.message}"
                                                 )
                                             }
                                     }
@@ -438,13 +434,13 @@ class AudioCaptureService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun createNotificationChannel() {
-        val channel = NotificationChannel(CHANNEL_ID, "Flux Listening", NotificationManager.IMPORTANCE_LOW)
+        val channel = NotificationChannel(CHANNEL_ID, "Chad Listening", NotificationManager.IMPORTANCE_LOW)
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
     private fun buildNotification(text: String): Notification =
         NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Flux")
+            .setContentTitle("Chad")
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setOngoing(true)

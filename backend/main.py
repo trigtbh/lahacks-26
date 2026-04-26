@@ -1099,6 +1099,28 @@ class WorkflowTriggerRequest(BaseModel):
     trigger_phrase: str
 
 
+class WorkflowSeedRequest(BaseModel):
+    user_id:   str
+    workflows: list[dict]   # [{trigger_phrase, steps: [{app, action, params}]}]
+
+
+# ---------------------------------------------------------------------------
+# POST /workflow/seed
+# Directly persist raw workflow dicts — no LLM, no classification.
+# ---------------------------------------------------------------------------
+@app.post("/workflow/seed")
+async def workflow_seed(payload: WorkflowSeedRequest):
+    ids = []
+    for wf in payload.workflows:
+        wid = await workflow_store.save_workflow(
+            user_id=payload.user_id,
+            trigger_phrase=wf["trigger_phrase"],
+            steps=wf.get("steps", []),
+        )
+        ids.append({"trigger_phrase": wf["trigger_phrase"], "id": wid})
+    return {"seeded": ids}
+
+
 # ---------------------------------------------------------------------------
 # POST /workflow/create
 # Classify a natural-language transcript → workflow schema → save to MongoDB.

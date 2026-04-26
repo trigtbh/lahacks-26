@@ -4,6 +4,7 @@ import com.flow.app.audio.AudioCaptureManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -50,6 +51,7 @@ class FlowApiClient(baseUrl: String) {
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(25, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
+        .connectionPool(ConnectionPool(0, 1, TimeUnit.NANOSECONDS))
         .build()
 
     /** Generates a new unique ID for an audio session. */
@@ -134,14 +136,12 @@ class FlowApiClient(baseUrl: String) {
                 .build()
 
             val response = http.newCall(request).execute()
-            check(response.isSuccessful) {
-                "Audio stream error ${response.code}: ${response.body?.string()}"
+            if (!response.isSuccessful) {
+                val errBody = try { response.body?.string() ?: "" } catch (_: Exception) { "" }
+                error("Audio stream error ${response.code}: $errBody")
             }
-            val body = JSONObject(response.body!!.string())
-            TranscriptResponse(
-                transcript = body.getString("transcript"),
-                partial = body.getBoolean("partial"),
-            )
+            response.body?.close()
+            TranscriptResponse(transcript = "", partial = false)
         }
     }
 

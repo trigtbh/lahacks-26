@@ -616,6 +616,31 @@ async def _drive_find_file_id(user_id: str, name: str) -> str:
     return files[0]["id"] if files else ""
 
 
+async def _drive_read_document(user_id: str, params: dict) -> dict:
+    creds = await get_google_creds(user_id)
+    docs_svc = build("docs", "v1", credentials=creds)
+    file_name = params.get("file_name", "")
+    file_id   = params.get("file_id", "")
+    if not file_id and file_name:
+        file_id = await _drive_find_file_id(user_id, file_name)
+    if not file_id:
+        raise ValueError(f"No Drive document found: {file_name!r}")
+    doc = docs_svc.documents().get(documentId=file_id).execute()
+    # Extract plain text from the structural content array
+    lines: list[str] = []
+    for elem in doc.get("body", {}).get("content", []):
+        para = elem.get("paragraph")
+        if not para:
+            continue
+        for pe in para.get("elements", []):
+            text = pe.get("textRun", {}).get("content", "")
+            if text:
+                lines.append(text)
+    plain_text = "".join(lines).strip()
+    log.info("Drive doc read: %s (%d chars)", file_id, len(plain_text))
+    return {"document_id": file_id, "text": plain_text}
+
+
 async def _drive_create_document(user_id: str, params: dict) -> dict:
     creds = await get_google_creds(user_id)
     docs_svc = build("docs", "v1", credentials=creds)
@@ -850,6 +875,7 @@ _OAUTH_HANDLERS: dict[tuple[str, str], Any] = {
     ("google_calendar",  "cancel_event"):    _gcal_cancel_event,
     ("google_maps",      "get_directions"):  _maps_get_directions,
     ("google_maps",      "search_nearby"):   _maps_search_nearby,
+    ("google_drive",     "read_document"):   _drive_read_document,
     ("google_drive",     "create_document"): _drive_create_document,
     ("google_drive",     "search_files"):    _drive_search_files,
     ("google_drive",     "share_file"):      _drive_share_file,
