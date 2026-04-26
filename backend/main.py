@@ -37,6 +37,8 @@ import token_store
 from executor import execute_workflow, execute_workflow_stream, preview_workflow
 from ai.classifier import classify, classify_for_user
 from ai.validator import validate
+from ai.app_resolver import get_available_apps
+from ai.environment import ALLOWED_ACTIONS, INNATE_ACTIONS, CONTROL_ACTIONS
 
 SLACK_CLIENT_ID      = os.environ.get("SLACK_CLIENT_ID", "")
 print(f"SLACK_CLIENT_ID: {SLACK_CLIENT_ID}")
@@ -1206,12 +1208,17 @@ async def workflow_preview(payload: WorkflowPreviewRequest):
         }
 
     errors = validate(workflow)
+    available = await get_available_apps(payload.user_id)
+    all_actions = {**{k: v for k, v in ALLOWED_ACTIONS.items() if k in available}, "innate": INNATE_ACTIONS, "control": CONTROL_ACTIONS}
+    available_skills = [f"{app}.{act}" for app, actions in all_actions.items() for act in actions]
+
     return {
         "trigger_phrase":    workflow.get("trigger_phrase", ""),
         "steps":             workflow.get("steps", []),
         "missing_params":    workflow.get("missing_params", []),
         "confidence":        workflow.get("confidence"),
         "validation_errors": errors,
+        "available_skills":  available_skills,
     }
 
 

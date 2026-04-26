@@ -242,6 +242,9 @@
   <div id="workflow-section" style="display:none">
     <hr class="divider">
 
+    <div class="section-title">Available Skills Context</div>
+    <div id="skills-container" style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:24px;"></div>
+
     <div class="section-title">Generated Workflow</div>
 
     <div class="meta-row" id="meta-row"></div>
@@ -389,6 +392,14 @@ function displayWorkflow(data) {
     <div class="meta-item"><span style="color:var(--muted)">steps: </span><strong>${data.steps.length}</strong></div>
     <div class="meta-item"><span style="color:var(--muted)">confidence: </span><strong>${conf}</strong></div>
   `;
+
+  // Skills
+  const skillsBox = document.getElementById('skills-container');
+  if (data.available_skills && data.available_skills.length) {
+    skillsBox.innerHTML = data.available_skills.map(s => `<span class="badge" style="border-color:var(--border); color:var(--text2); background:var(--bg); padding:3px 6px;">${s}</span>`).join('');
+  } else {
+    skillsBox.innerHTML = '<span style="color:var(--muted); font-size:11px;">None</span>';
+  }
 
   // Warnings
   const warnBox = document.getElementById('warn-container');

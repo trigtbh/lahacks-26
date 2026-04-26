@@ -30,7 +30,7 @@ load_dotenv(_AI_DIR.parent / ".env")
 load_dotenv()
 
 
-_DEFAULT_MODEL = "google/gemma-4-26b-a4b-it"
+_DEFAULT_MODEL = "google/gemma-4-31b-it"
 
 
 def _get_api_key() -> str:

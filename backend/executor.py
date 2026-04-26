@@ -592,7 +592,7 @@ async def _flights_search_flights(user_id: str, params: dict) -> dict:
     }
 
 
-async def _google_people_list_connections(user_id: str, params: dict) -> list[dict]:
+async def _google_people_list_contacts(user_id: str, params: dict) -> list[dict]:
     limit = int(params.get("limit", 100))
     return await google_people.list_connections(user_id, limit)
 
@@ -729,7 +729,7 @@ _OAUTH_HANDLERS: dict[tuple[str, str], Any] = {
     ("dominos",          "order_pizza"):     _dominos_order_pizza,
     ("dominos",          "reorder_last"):    _dominos_reorder_last,
     ("slack",            "get_channels"):    _slack_get_channels,
-    ("google_people",    "list_connections"): _google_people_list_connections,
+    ("google_people",    "list_contacts"):   _google_people_list_contacts,
     ("google_people",    "search_contacts"): _google_people_search_contacts,
     ("notion",           "create_page"):     _notion_create_page,
     ("notion",           "append_to_page"):  _notion_append_to_page,
@@ -777,7 +777,7 @@ def _summarize_step_preview(app: str, action: str, resolved: dict[str, Any]) -> 
         return f"Post in Slack channel {resolved.get('channel', '')}".strip()
     if app == "slack" and action == "get_channels":
         return "Fetch a list of all public Slack channels"
-    if app == "google_people" and action == "list_connections":
+    if app == "google_people" and action == "list_contacts":
         return "Fetch a list of all your contacts"
     if app == "google_people" and action == "search_contacts":
         return f"Search your contacts for '{resolved.get('query', '')}'"
