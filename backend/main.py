@@ -1361,8 +1361,7 @@ class InferRequest(BaseModel):
 @app.post("/infer/query")
 async def infer_query(payload: InferRequest):
     """
-    Pass a query to Gemma with the user's connected OAuth services as context.
-    Gemma answers directly — no skill routing, no workflow schema.
+    Stage 1 + 2: integration analysis + substep plan with real API calls.
     """
     from ai.infer_classifier import infer_for_user
     logger.info("[infer/query] user=%s prompt=%r", payload.user_id, payload.prompt)
@@ -1370,6 +1369,32 @@ async def infer_query(payload: InferRequest):
         result = await infer_for_user(payload.prompt, payload.user_id)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Inference failed: {exc}")
+    return result
+
+
+class InferClarifyRequest(BaseModel):
+    user_id:          str
+    original_query:   str
+    previous_substeps: list
+    clarifications:   dict  # { "question text": "answer text" }
+
+
+@app.post("/infer/clarify")
+async def infer_clarify(payload: InferClarifyRequest):
+    """
+    Re-run substep planning after user has answered clarification questions.
+    """
+    from ai.infer_classifier import clarify_for_user
+    logger.info("[infer/clarify] user=%s query=%r", payload.user_id, payload.original_query)
+    try:
+        result = await clarify_for_user(
+            payload.original_query,
+            payload.user_id,
+            payload.previous_substeps,
+            payload.clarifications,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Clarification failed: {exc}")
     return result
 
 

@@ -6,7 +6,6 @@
 <title>Infer</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
   :root {
     --bg:      #080808;
     --card:    #111;
@@ -16,123 +15,92 @@
     --success: #4ade80;
     --error:   #f87171;
     --warn:    #facc15;
+    --running: #60a5fa;
     --text:    #e8e8e8;
     --text2:   #999;
   }
-
   body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: 'SF Mono', 'Fira Code', monospace;
-    font-size: 13px;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 48px 16px 80px;
+    background: var(--bg); color: var(--text);
+    font-family: 'SF Mono', 'Fira Code', monospace; font-size: 13px;
+    min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; padding: 48px 16px 80px;
   }
-
-  .page { width: 100%; max-width: 720px; }
-
-  h1 {
-    font-size: 15px;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--muted);
-    margin-bottom: 32px;
-  }
-
-  label { display: block; color: var(--muted); font-size: 11px; letter-spacing: 0.06em; margin-bottom: 6px; }
-
+  .page { width: 100%; max-width: 760px; }
+  h1 { font-size: 15px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: 32px; }
+  label { display: block; color: var(--muted); font-size: 11px; letter-spacing: .06em; margin-bottom: 6px; }
   input, textarea {
-    width: 100%;
-    background: var(--card);
-    border: 1px solid var(--border);
-    color: var(--text);
-    font-family: inherit;
-    font-size: 13px;
-    padding: 10px 12px;
-    border-radius: 6px;
-    outline: none;
-    transition: border-color 0.15s;
+    width: 100%; background: var(--card); border: 1px solid var(--border);
+    color: var(--text); font-family: inherit; font-size: 13px; padding: 10px 12px;
+    border-radius: 6px; outline: none; transition: border-color .15s;
   }
   input:focus, textarea:focus { border-color: #333; }
   textarea { resize: vertical; min-height: 80px; }
-
   .field { margin-bottom: 16px; }
-
   button {
-    background: var(--accent);
-    color: #000;
-    border: none;
-    padding: 9px 20px;
-    border-radius: 6px;
-    font-family: inherit;
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.05em;
-    cursor: pointer;
-    transition: opacity 0.15s;
+    background: var(--accent); color: #000; border: none; padding: 9px 20px;
+    border-radius: 6px; font-family: inherit; font-size: 12px; font-weight: 700;
+    letter-spacing: .05em; cursor: pointer; transition: opacity .15s;
   }
-  button:hover { opacity: 0.85; }
-  button:disabled { opacity: 0.35; cursor: not-allowed; }
-
+  button:hover { opacity: .85; }
+  button:disabled { opacity: .35; cursor: not-allowed; }
   .btn-row { display: flex; gap: 10px; align-items: center; margin-top: 4px; }
   .status-msg { font-size: 11px; color: var(--muted); margin-left: 4px; }
-
   .divider { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
-
   .section-title {
-    font-size: 11px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--muted);
-    margin-bottom: 10px;
+    font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 10px;
   }
-
-  .tag {
-    font-size: 10px;
-    border-radius: 4px;
-    padding: 3px 7px;
-    border: 1px solid;
-  }
-  .tag-connected  { background: #0f1f0f; border-color: #1a3a1a; color: var(--success); }
-  .tag-missing    { background: #1a0808; border-color: #5a1a1a; color: var(--error); }
-  .tag-neutral    { background: #111; border-color: #2a2a2a; color: var(--text2); }
-
-  .integration-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin-bottom: 20px;
-  }
-
-  #response-box {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 16px;
-    font-size: 13px;
-    color: var(--text);
-    line-height: 1.7;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-
-  .third-party-indicator {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 11px;
-    margin-bottom: 20px;
-    padding: 6px 10px;
-    border-radius: 5px;
-    border: 1px solid;
+  .tag { font-size: 10px; border-radius: 4px; padding: 3px 7px; border: 1px solid; }
+  .tag-connected { background: #0f1f0f; border-color: #1a3a1a; color: var(--success); }
+  .tag-missing   { background: #1a0808; border-color: #5a1a1a; color: var(--error); }
+  .tag-neutral   { background: #111; border-color: #2a2a2a; color: var(--text2); }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 20px; }
+  .tpi {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 11px;
+    margin-bottom: 20px; padding: 6px 10px; border-radius: 5px; border: 1px solid;
   }
   .tpi-yes  { background: #0e1a0e; border-color: #1e3a1e; color: var(--success); }
   .tpi-no   { background: #111; border-color: #222; color: var(--muted); }
   .tpi-warn { background: #1a1200; border-color: #3d2f00; color: var(--warn); }
+
+  /* ── Response box ── */
+  .response-box {
+    background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px; font-size: 13px; color: var(--text); line-height: 1.7;
+    white-space: pre-wrap; word-break: break-word; margin-bottom: 24px;
+  }
+
+  /* ── Substeps ── */
+  .substeps-list { list-style: none; display: flex; flex-direction: column; gap: 10px; }
+  .substep-card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .substep-card.needs-clarification { border-color: var(--warn); }
+  .substep-header {
+    display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px;
+  }
+  .substep-index { font-size: 10px; color: var(--muted); flex-shrink: 0; }
+  .substep-desc  { font-size: 13px; font-weight: 600; }
+  .api-block {
+    background: #0d0d0d; border: 1px solid #1a1a1a; border-radius: 5px;
+    padding: 8px 10px; font-size: 11px; color: var(--text2); margin-top: 6px;
+  }
+  .api-method { color: var(--running); font-weight: 700; margin-right: 6px; }
+  .api-url { color: var(--text); word-break: break-all; }
+  .api-params { margin-top: 6px; color: var(--text2); white-space: pre-wrap; }
+  .clarify-q {
+    margin-top: 10px; font-size: 11px; color: var(--warn);
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .clarify-q label { color: var(--warn); margin-bottom: 2px; }
+
+  /* ── Clarify submit ── */
+  .clarify-section {
+    margin-top: 28px; background: #0e0e00; border: 1px solid #3d3000;
+    border-radius: 8px; padding: 18px;
+  }
+  .clarify-section .section-title { color: var(--warn); }
 </style>
 </head>
 <body>
@@ -143,12 +111,10 @@
     <label>USER ID</label>
     <input id="user-id" type="text" placeholder="your-user-id" />
   </div>
-
   <div class="field">
     <label>QUERY</label>
-    <textarea id="prompt" placeholder="Ask anything…&#10;e.g. Send an email to my next meeting attendees"></textarea>
+    <textarea id="prompt" placeholder="Ask anything…&#10;e.g. Send my next meeting attendees an email saying I'm running late"></textarea>
   </div>
-
   <div class="btn-row">
     <button id="ask-btn" onclick="ask()">Ask Gemma</button>
     <span id="status" class="status-msg"></span>
@@ -158,22 +124,38 @@
     <hr class="divider">
 
     <div class="section-title">Connected Services</div>
-    <div class="integration-row" id="connected-services"></div>
+    <div class="row" id="connected-services"></div>
 
     <div class="section-title">3rd Party Analysis</div>
     <div id="tpi-indicator"></div>
 
     <div id="integrations-section" style="display:none">
       <div class="section-title">Required Integrations</div>
-      <div class="integration-row" id="required-integrations"></div>
+      <div class="row" id="required-integrations"></div>
     </div>
 
     <div class="section-title">Response</div>
-    <div id="response-box"></div>
+    <div class="response-box" id="response-box"></div>
+
+    <div id="substeps-section" style="display:none">
+      <div class="section-title">Substeps</div>
+      <ul class="substeps-list" id="substeps-list"></ul>
+
+      <div id="clarify-section" class="clarify-section" style="display:none">
+        <div class="section-title">Gemma needs more info</div>
+        <div id="clarify-fields"></div>
+        <div class="btn-row" style="margin-top:14px">
+          <button onclick="submitClarifications()">Submit Answers</button>
+          <span id="clarify-status" class="status-msg"></span>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
 <script>
+let _state = {};  // original_query, user_id, substeps
+
 async function ask() {
   const userId = document.getElementById('user-id').value.trim();
   const prompt = document.getElementById('prompt').value.trim();
@@ -181,8 +163,7 @@ async function ask() {
 
   const btn = document.getElementById('ask-btn');
   btn.disabled = true;
-  document.getElementById('status').textContent = 'Asking Gemma…';
-  document.getElementById('status').style.color = 'var(--muted)';
+  setStatus('status', 'Asking Gemma…');
   document.getElementById('result-section').style.display = 'none';
 
   try {
@@ -191,73 +172,167 @@ async function ask() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ user_id: userId, prompt }),
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || res.statusText);
-    }
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
     const data = await res.json();
+    _state = { original_query: prompt, user_id: userId, substeps: data.substeps || [] };
     render(data);
-    document.getElementById('status').textContent = '';
+    setStatus('status', '');
   } catch (e) {
-    document.getElementById('status').textContent = `Error: ${e.message}`;
-    document.getElementById('status').style.color = 'var(--error)';
+    setStatus('status', `Error: ${e.message}`, 'var(--error)');
   } finally {
     btn.disabled = false;
   }
 }
 
+function setStatus(id, msg, color) {
+  const el = document.getElementById(id);
+  el.textContent = msg;
+  el.style.color = color || 'var(--muted)';
+}
+
 function render(data) {
   // Connected services
-  const connectedBox = document.getElementById('connected-services');
-  if (data.connected_services && data.connected_services.length) {
-    connectedBox.innerHTML = data.connected_services
-      .map(s => `<span class="tag tag-connected">${s}</span>`).join('');
-  } else {
-    connectedBox.innerHTML = '<span style="color:var(--muted);font-size:11px;">None</span>';
-  }
+  const cs = document.getElementById('connected-services');
+  cs.innerHTML = (data.connected_services || []).length
+    ? data.connected_services.map(s => `<span class="tag tag-connected">${s}</span>`).join('')
+    : '<span style="color:var(--muted);font-size:11px;">None</span>';
 
   // 3rd party indicator
   const tpi = document.getElementById('tpi-indicator');
-  const notConnected = data.not_connected || [];
-  const connected    = data.connected || [];
-  const required     = data.required_integrations || [];
-
+  const notConn = data.not_connected || [];
   if (!data.involves_third_party) {
-    tpi.className = 'third-party-indicator tpi-no';
+    tpi.className = 'tpi tpi-no';
     tpi.textContent = '— No third-party integration required';
-  } else if (notConnected.length > 0) {
-    tpi.className = 'third-party-indicator tpi-warn';
-    tpi.textContent = `⚠ Requires integrations that are not connected: ${notConnected.join(', ')}`;
+  } else if (notConn.length) {
+    tpi.className = 'tpi tpi-warn';
+    tpi.textContent = `⚠ Requires integrations that are not connected: ${notConn.join(', ')}`;
   } else {
-    tpi.className = 'third-party-indicator tpi-yes';
-    tpi.textContent = `✓ Third-party integration required — all connected`;
+    tpi.className = 'tpi tpi-yes';
+    tpi.textContent = '✓ Third-party integration required — all connected';
   }
 
-  // Required integrations breakdown
-  const intSection = document.getElementById('integrations-section');
-  if (required.length) {
-    intSection.style.display = 'block';
-    document.getElementById('required-integrations').innerHTML = required.map(s => {
-      const isConnected = (data.connected || []).includes(s);
-      const cls = isConnected ? 'tag-connected' : 'tag-missing';
-      const suffix = isConnected ? ' ✓' : ' ✕';
-      return `<span class="tag ${cls}">${s}${suffix}</span>`;
+  // Required integrations
+  const req = data.required_integrations || [];
+  const intSec = document.getElementById('integrations-section');
+  if (req.length) {
+    intSec.style.display = 'block';
+    document.getElementById('required-integrations').innerHTML = req.map(s => {
+      const ok = (data.connected || []).includes(s);
+      return `<span class="tag ${ok ? 'tag-connected' : 'tag-missing'}">${s}${ok ? ' ✓' : ' ✕'}</span>`;
     }).join('');
   } else {
-    intSection.style.display = 'none';
+    intSec.style.display = 'none';
   }
 
   // Response
   document.getElementById('response-box').textContent = data.response || '';
+
+  // Substeps
+  const steps = data.substeps || [];
+  const subSec = document.getElementById('substeps-section');
+  if (steps.length) {
+    subSec.style.display = 'block';
+    renderSubsteps(steps);
+  } else {
+    subSec.style.display = 'none';
+  }
+
   document.getElementById('result-section').style.display = 'block';
+}
+
+function renderSubsteps(steps) {
+  const list = document.getElementById('substeps-list');
+  list.innerHTML = '';
+  steps.forEach(step => {
+    const li = document.createElement('li');
+    li.className = 'substep-card' + (step.needs_clarification ? ' needs-clarification' : '');
+
+    let apiHTML = '';
+    if (step.api_call) {
+      const params = step.api_call.params && Object.keys(step.api_call.params).length
+        ? `\n${JSON.stringify(step.api_call.params, null, 2)}`
+        : '';
+      apiHTML = `
+        <div class="api-block">
+          <span class="api-method">${step.api_call.method}</span>
+          <span class="api-url">${step.api_call.endpoint}</span>
+          ${params ? `<div class="api-params">${params}</div>` : ''}
+        </div>`;
+    }
+
+    let clarifyHTML = '';
+    if (step.needs_clarification && step.clarification_question) {
+      clarifyHTML = `
+        <div class="clarify-q">
+          <label>⚠ ${step.clarification_question}</label>
+        </div>`;
+    }
+
+    li.innerHTML = `
+      <div class="substep-header">
+        <span class="substep-index">#${step.index}</span>
+        <span class="substep-desc">${step.description}</span>
+      </div>
+      ${apiHTML}
+      ${clarifyHTML}
+    `;
+    list.appendChild(li);
+  });
+
+  // Clarification inputs
+  const clarifySec = document.getElementById('clarify-section');
+  const needsClarify = steps.filter(s => s.needs_clarification && s.clarification_question);
+  if (needsClarify.length) {
+    clarifySec.style.display = 'block';
+    const fields = document.getElementById('clarify-fields');
+    fields.innerHTML = needsClarify.map((s, i) => `
+      <div class="field">
+        <label>${s.clarification_question}</label>
+        <input type="text" id="clarify-ans-${i}" data-question="${s.clarification_question.replace(/"/g,'&quot;')}" placeholder="Your answer…" />
+      </div>
+    `).join('');
+  } else {
+    clarifySec.style.display = 'none';
+  }
+}
+
+async function submitClarifications() {
+  const inputs = document.querySelectorAll('#clarify-fields input');
+  const clarifications = {};
+  inputs.forEach(inp => {
+    const q = inp.getAttribute('data-question');
+    const a = inp.value.trim();
+    if (q && a) clarifications[q] = a;
+  });
+
+  if (!Object.keys(clarifications).length) { alert('Please answer at least one question.'); return; }
+
+  setStatus('clarify-status', 'Replanning…');
+  try {
+    const res = await fetch('/infer/clarify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: _state.user_id,
+        original_query: _state.original_query,
+        previous_substeps: _state.substeps,
+        clarifications,
+      }),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+    const data = await res.json();
+    _state.substeps = data.substeps || [];
+    renderSubsteps(data.substeps || []);
+    setStatus('clarify-status', '');
+  } catch (e) {
+    setStatus('clarify-status', `Error: ${e.message}`, 'var(--error)');
+  }
 }
 
 document.addEventListener('keydown', e => {
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-    if (document.activeElement === document.getElementById('prompt') ||
-        document.activeElement === document.getElementById('user-id')) {
-      ask();
-    }
+    const active = document.activeElement;
+    if (active.id === 'prompt' || active.id === 'user-id') ask();
   }
 });
 </script>
