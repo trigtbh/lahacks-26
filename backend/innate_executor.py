@@ -14,6 +14,8 @@ from typing import Any
 
 import httpx
 
+import variable_store
+
 log = logging.getLogger(__name__)
 
 _TIMEOUT = 10.0
@@ -102,18 +104,31 @@ async def _get_user_info(user_id: str, params: dict, context: dict) -> Any:
 
 async def _set_variable(user_id: str, params: dict, context: dict) -> Any:
     value = params.get("value")
-    # The executor will store this under output_key; set_variable also writes
-    # directly via the key param so the context is updated immediately.
     key = params.get("key", "")
+    scope = params.get("scope", "local").lower()
+    
     if key:
         context[key] = value
+        if scope == "global":
+            await variable_store.set_global_variable(user_id, key, value)
+            
     return value
 
 
 async def _get_variable(user_id: str, params: dict, context: dict) -> Any:
     key = params["key"]
     default = params.get("default")
-    return context.get(key, default)
+    
+    # Check local context first
+    if key in context:
+        return context[key]
+        
+    # Fallback to global store
+    global_val = await variable_store.get_global_variable(user_id, key, None)
+    if global_val is not None:
+        return global_val
+        
+    return default
 
 
 async def _calculate(user_id: str, params: dict, context: dict) -> Any:
@@ -128,6 +143,50 @@ async def _calculate(user_id: str, params: dict, context: dict) -> Any:
     except Exception as e:
         log.warning("innate.calculate: error evaluating %r: %s", safe_expr, e)
         return 0
+
+
+async def _datetime_math(user_id: str, params: dict, context: dict) -> str:
+    from datetime import timedelta
+    
+    base_time_str = str(params.get("base_time", ""))
+    operation = str(params.get("operation", "add")).lower()
+    amount = float(params.get("amount", 0))
+    unit = str(params.get("unit", "days")).lower()
+    fmt = str(params.get("format", "iso")).lower()
+    
+    try:
+        base_time = datetime.fromisoformat(base_time_str.replace("Z", "+00:00"))
+    except ValueError:
+        base_time = datetime.now(timezone.utc)
+        
+    # Map friendly units to timedelta args
+    if unit in ("year", "years"):
+        delta = timedelta(days=amount * 365)
+    elif unit in ("month", "months"):
+        delta = timedelta(days=amount * 30)
+    elif unit in ("week", "weeks"):
+        delta = timedelta(weeks=amount)
+    elif unit in ("hour", "hours"):
+        delta = timedelta(hours=amount)
+    elif unit in ("minute", "minutes"):
+        delta = timedelta(minutes=amount)
+    elif unit in ("second", "seconds"):
+        delta = timedelta(seconds=amount)
+    else:
+        delta = timedelta(days=amount)
+        
+    if operation == "subtract":
+        result_time = base_time - delta
+    else:
+        result_time = base_time + delta
+        
+    if fmt == "human":
+        return result_time.strftime("%A, %B %d, %Y at %I:%M %p").replace(" 0", " ")
+    elif fmt == "date_only":
+        return result_time.strftime("%Y-%m-%d")
+    elif fmt == "time_only":
+        return result_time.strftime("%H:%M:%S")
+    return result_time.isoformat()
 
 
 async def _format_text(user_id: str, params: dict, context: dict) -> str:
@@ -253,6 +312,7 @@ async def _closest_element(user_id: str, params: dict, context: dict) -> Any:
 
 _HANDLERS = {
     "get_datetime":  _get_datetime,
+    "datetime_math": _datetime_math,
     "get_user_info": _get_user_info,
     "set_variable":  _set_variable,
     "get_variable":  _get_variable,

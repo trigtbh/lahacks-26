@@ -951,7 +951,8 @@ async def _execute_steps(
             log.error("%s failed: %s", label, exc, exc_info=True)
             failed.append({"step": label, "error": str(exc)})
             if event_sink is not None:
-                event_sink.append({"type": "step_error", "label": label, "error": str(exc)})
+                await event_sink.put({"type": "step_error", "label": label, "error": str(exc)})
+            await asyncio.sleep(1)
         except Exception as exc:
             log.error("%s failed: %s", label, exc, exc_info=True)
             failed.append({"step": label, "error": str(exc)})

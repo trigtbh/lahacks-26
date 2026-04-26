@@ -220,20 +220,25 @@ INNATE_ACTIONS: dict[str, dict] = {
         "optional": ["format", "timezone"],
         "description": "Get current date/time. format: iso (default), human, date_only, time_only.",
     },
+    "datetime_math": {
+        "required": ["base_time", "operation", "amount", "unit"],
+        "optional": ["format"],
+        "description": "Perform datetime math (e.g. addition, subtraction). base_time: ISO string. operation: 'add' or 'subtract'. unit: 'days', 'hours', 'minutes', etc. Always provide an output_key.",
+    },
     "set_variable": {
         "required": ["key", "value"],
-        "optional": [],
-        "description": "Store a value in workflow context under the given key for later steps.",
+        "optional": ["scope"],
+        "description": "Store a value under the given key. scope: 'local' (this run only, default) or 'global' (persists across runs for this user).",
     },
     "get_variable": {
         "required": ["key"],
         "optional": ["default"],
-        "description": "Read a value from workflow context. Returns default if key is missing.",
+        "description": "Read a value by key. Checks local context first, then global variables. Returns default if missing.",
     },
     "calculate": {
         "required": ["expression"],
         "optional": [],
-        "description": "Evaluate a safe numeric expression. Use {{context.key}} to reference context values.",
+        "description": "Evaluate a safe numeric expression. Use {{context.key}} to reference context values. You MUST provide an 'output_key' on this step to save the calculated result.",
     },
     "format_text": {
         "required": ["template"],
