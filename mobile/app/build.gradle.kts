@@ -35,6 +35,9 @@ android {
         buildConfigField("String", "MWDAT_CLIENT_TOKEN", "\"${localProp("mwdat_client_token")}\"")
         buildConfigField("String", "FLOW_API_BASE_URL", "\"${localProp("flow_api_base_url")}\"")
         buildConfigField("String", "FLOW_USER_ID", "\"${localProp("flow_user_id")}\"")
+        buildConfigField("double", "VAD_MIN_SPEECH_RMS", localProp("vad_min_speech_rms").ifBlank { "50.0" })
+        buildConfigField("double", "VAD_MIN_SPEECH_DELTA", localProp("vad_min_speech_delta").ifBlank { "30.0" })
+        buildConfigField("int", "VAD_START_TRIGGER_CHUNKS", localProp("vad_start_trigger_chunks").ifBlank { "2" })
     }
 
     buildTypes {
@@ -69,6 +72,7 @@ dependencies {
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
+    implementation(libs.androidx.material.icons.extended)
     debugImplementation(libs.androidx.ui.tooling)
 
     // Meta Wearables DAT SDK

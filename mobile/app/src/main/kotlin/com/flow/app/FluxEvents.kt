@@ -31,6 +31,13 @@ object FluxEvents {
     private val _agentSearchTriggered = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val agentSearchTriggered = _agentSearchTriggered.asSharedFlow()
 
+    private val _audioActive = MutableSharedFlow<Boolean>(replay = 1, extraBufferCapacity = 8)
+    val audioActive = _audioActive.asSharedFlow()
+
+    fun emitAudioActive(active: Boolean) {
+        _audioActive.tryEmit(active)
+    }
+
     fun emitWakeWordDetected(transcript: String) {
         _wakeWordDetected.tryEmit(transcript)
     }

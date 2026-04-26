@@ -24,6 +24,7 @@ data class FlowUiState(
     val lastTranscript: String = "",
     val debugMessage: String = "",
     val errorMessage: String = "",
+    val isAudioActive: Boolean = false,
 )
 
 class FlowViewModel(app: Application) : AndroidViewModel(app) {
@@ -95,6 +96,11 @@ class FlowViewModel(app: Application) : AndroidViewModel(app) {
                     statusMessage = "Finding agent...",
                     workflowCommand = "Searching for $agentName on Agentverse",
                 )
+            }
+        }
+        viewModelScope.launch {
+            FluxEvents.audioActive.collect { active ->
+                _uiState.value = _uiState.value.copy(isAudioActive = active)
             }
         }
     }
