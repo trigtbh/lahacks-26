@@ -3,10 +3,10 @@ llm.py
 Single source of truth for LLM access across the AI layer.
 
 Every other AI file (classifier, validator, resolver, dialogue, executor)
-imports from here. Do NOT instantiate OpenAI clients elsewhere.
+imports from here. Do NOT instantiate genai clients elsewhere.
 
-Uses the OpenAI SDK pointed at OpenRouter to access Gemma models.
-Model is swappable via LLM_MODEL env var.
+Uses the Google GenAI SDK (google-genai) pointed at Google AI Studio
+to access Gemma models.  Model is swappable via LLM_MODEL env var.
 """
 
 from __future__ import annotations
@@ -18,7 +18,8 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from openai import OpenAI
+from google import genai
+from google.genai import types
 
 
 # Load .env from the ai/ dir first (this file's neighbour), then fall back to
@@ -30,14 +31,14 @@ load_dotenv(_AI_DIR.parent / ".env")
 load_dotenv()
 
 
-_DEFAULT_MODEL = "google/gemma-4-26b-a4b-it"
+_DEFAULT_MODEL = "gemma-4-26b-a4b-it"
 
 
 def _get_api_key() -> str:
-    key = os.getenv("OPENROUTER_API_KEY")
+    key = os.getenv("GEMINI_API_KEY")
     if not key:
         raise RuntimeError(
-            "No API key found. Set OPENROUTER_API_KEY in .env."
+            "No API key found. Set GEMINI_API_KEY in .env."
         )
     return key
 
@@ -47,10 +48,7 @@ def _get_model() -> str:
 
 
 # Module-level client. Single instance shared across the AI layer.
-client = OpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=_get_api_key(),
-)
+client = genai.Client(api_key=_get_api_key())
 
 
 # ─────────────────────────────────────────────
@@ -87,16 +85,16 @@ def generate_json(
     """
     model = _get_model()
 
-    response = client.chat.completions.create(
+    response = client.models.generate_content(
         model=model,
-        messages=[
-            {"role": "system", "content": system_instruction},
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=temperature,
+        contents=user_prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            temperature=temperature,
+        ),
     )
 
-    raw = response.choices[0].message.content or ""
+    raw = response.text or ""
     raw = _strip_fences(raw)
 
     try:
@@ -128,16 +126,16 @@ def generate_json_coerce(
     """
     model = _get_model()
 
-    response = client.chat.completions.create(
+    response = client.models.generate_content(
         model=model,
-        messages=[
-            {"role": "system", "content": system_instruction},
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=temperature,
+        contents=user_prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            temperature=temperature,
+        ),
     )
 
-    raw = response.choices[0].message.content or ""
+    raw = response.text or ""
     raw = _strip_fences(raw)
 
     try:
@@ -170,12 +168,14 @@ def generate_text(
     Used by dialogue.py for plain-English voice questions where JSON would be wrong.
     """
     model = _get_model()
-    response = client.chat.completions.create(
+
+    response = client.models.generate_content(
         model=model,
-        messages=[
-            {"role": "system", "content": system_instruction},
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=temperature,
+        contents=user_prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            temperature=temperature,
+        ),
     )
-    return (response.choices[0].message.content or "").strip()
+
+    return (response.text or "").strip()

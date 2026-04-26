@@ -2,6 +2,7 @@ fastapi
 uvicorn
 python-multipart
 openai
+google-genai
 pydantic
 motor
 python-dotenv
@@ -14,4 +15,4 @@ google-auth
 google-auth-oauthlib
 google-auth-httplib2
 google-api-python-client
-# LLM (Gemma via OpenRouter — uses openai SDK above)
+# LLM (Gemma via Google AI Studio — uses google-genai SDK)
