@@ -420,21 +420,24 @@ async def _classify_workflow_request(user_id: str, transcript: str) -> tuple[dic
         logger.error("[audio/workflow] classify failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=502, detail=f"Workflow classification failed: {exc}")
 
-    if workflow.get("intent") == "denied":
+    intent = workflow.get("intent")
+
+    if intent == "denied":
         reason = workflow.get("denial_reason", "None of your connected apps can handle that request.")
         logger.info("[audio/workflow] denied: %s user=%s", reason, user_id)
-        return {"workflow_status": "denied", "workflow_message": reason}
+        return {"workflow_status": "denied", "workflow_message": reason}, []
+
+    if intent == "other" or not workflow.get("trigger_phrase", "").strip():
+        logger.info("[audio/workflow] not a workflow request user=%s intent=%r", user_id, intent)
+        return {"workflow_status": "not_workflow", "workflow_message": "I didn't understand that as a workflow. Try saying what you want to automate."}, []
 
     validation_errors = validate(workflow)
     if validation_errors:
         logger.warning("[audio/workflow] validation errors: %s", validation_errors)
 
-    trigger_phrase = workflow.get("trigger_phrase", "").strip()
     steps = workflow.get("steps", [])
-    if not trigger_phrase:
-        raise HTTPException(status_code=422, detail="Classifier returned no trigger_phrase")
     if not steps:
-        raise HTTPException(status_code=422, detail="Classifier returned no workflow steps")
+        return {"workflow_status": "not_workflow", "workflow_message": "I couldn't figure out the steps for that workflow."}, []
 
     return workflow, validation_errors
 
@@ -486,6 +489,8 @@ async def _create_workflow_from_transcript(
     force_create: bool = False,
 ) -> dict:
     workflow, validation_errors = await _classify_workflow_request(user_id, transcript)
+    if workflow.get("workflow_status") in ("denied", "not_workflow"):
+        return workflow
     trigger_phrase = workflow.get("trigger_phrase", "").strip()
     steps = workflow.get("steps", [])
 
