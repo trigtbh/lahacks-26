@@ -271,6 +271,17 @@ async def _http_request(user_id: str, params: dict, context: dict) -> Any:
             return resp.text
 
 
+async def _ai_summarize(user_id: str, params: dict, context: dict) -> str:
+    from ai.llm import generate_text
+    content = params.get("content", "")
+    if isinstance(content, list):
+        content = "\n".join(str(item) for item in content)
+    elif not isinstance(content, str):
+        content = str(content)
+    instruction = params.get("instruction", "Summarize the following content concisely in plain English.")
+    return generate_text(instruction, content)
+
+
 async def _log(user_id: str, params: dict, context: dict) -> None:
     level = str(params.get("level", "info")).lower()
     msg = str(params.get("message", ""))
@@ -328,6 +339,7 @@ _HANDLERS = {
     "http_request":  _http_request,
     "log":           _log,
     "closest_element": _closest_element,
+    "ai_summarize":    _ai_summarize,
 }
 
 

@@ -16,7 +16,7 @@ from urllib.parse import urlencode, urlparse
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -35,7 +35,7 @@ import workflow_store
 import zapier_store
 import token_store
 from executor import execute_workflow, execute_workflow_stream, preview_workflow
-from ai.classifier import classify, classify_for_user
+from ai.classifier import classify_for_user
 from ai.validator import validate
 from ai.app_resolver import get_available_apps
 from ai.environment import ALLOWED_ACTIONS, INNATE_ACTIONS, CONTROL_ACTIONS

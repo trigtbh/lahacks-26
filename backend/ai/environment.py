@@ -295,6 +295,11 @@ INNATE_ACTIONS: dict[str, dict] = {
         "optional": ["key"],
         "description": "Find the closest element in a list of strings (or dicts) to a target string using fuzzy matching. items is a context ref. key is optional if items is a list of dicts.",
     },
+    "ai_summarize": {
+        "required": ["content"],
+        "optional": ["instruction"],
+        "description": "Use AI to summarize text or a list of items. content can be a string or context ref to a list (e.g. context.emails). instruction defaults to a concise plain-English summary. Always provide an output_key.",
+    },
 }
 
 

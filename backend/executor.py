@@ -217,7 +217,7 @@ async def _gmail_search_email(user_id: str, params: dict) -> list[dict]:
     creds = await get_google_creds(user_id)
     service = build("gmail", "v1", credentials=creds)
 
-    max_results = int(params.get("max_results", 5))
+    max_results = int(params.get("max_results", 10))
     result = service.users().messages().list(
         userId="me",
         q=params["query"],
@@ -225,8 +225,22 @@ async def _gmail_search_email(user_id: str, params: dict) -> list[dict]:
     ).execute()
 
     messages = result.get("messages", [])
-    log.info("Gmail search %r → %d result(s)", params["query"], len(messages))
-    return messages
+    detailed = []
+    for msg in messages:
+        detail = service.users().messages().get(
+            userId="me", id=msg["id"], format="metadata",
+            metadataHeaders=["Subject", "From", "Date"],
+        ).execute()
+        headers = {h["name"]: h["value"] for h in detail.get("payload", {}).get("headers", [])}
+        detailed.append({
+            "id": msg["id"],
+            "subject": headers.get("Subject", "(no subject)"),
+            "from": headers.get("From", ""),
+            "date": headers.get("Date", ""),
+            "snippet": detail.get("snippet", ""),
+        })
+    log.info("Gmail search %r → %d result(s)", params["query"], len(detailed))
+    return detailed
 
 
 # ─────────────────────────────────────────────
