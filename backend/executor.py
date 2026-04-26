@@ -10,6 +10,7 @@ import asyncio
 import base64
 import logging
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
 from typing import Any
@@ -59,7 +60,17 @@ def _resolve_static(value: Any) -> Any:
             return (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat()
         except ValueError:
             pass
+    if value.startswith("time.now-") and value.endswith("m"):
+        try:
+            minutes = int(value[len("time.now-"):-1])
+            return (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+        except ValueError:
+            pass
     return value
+
+
+# Matches embedded context references inside a larger string, e.g. "after:context.some_key"
+_INLINE_CONTEXT_RE = re.compile(r'context\.([a-zA-Z_][a-zA-Z0-9_.]*)')
 
 
 def _resolve_context_path(path: str, context: dict) -> Any:
@@ -84,12 +95,19 @@ async def _resolve_params(user_id: str, params: dict, context: dict | None = Non
         context = {}
     resolved = {}
     for key, value in params.items():
-        # Context references take priority.
-        if isinstance(value, str) and value.startswith("context."):
+        # Exact context reference — entire value is "context.some.path"
+        if isinstance(value, str) and value.startswith("context.") and not re.search(r'[^a-zA-Z0-9_.]', value[8:]):
             resolved[key] = _resolve_context_path(value[len("context."):], context)
             continue
 
         value = _resolve_static(value)
+
+        # Inline context references embedded in a larger string, e.g. "after:context.some_key"
+        if isinstance(value, str) and _INLINE_CONTEXT_RE.search(value):
+            def _sub_context(m: re.Match) -> str:
+                result = _resolve_context_path(m.group(1), context)
+                return str(result) if result is not None else m.group(0)
+            value = _INLINE_CONTEXT_RE.sub(_sub_context, value)
 
         if isinstance(value, str):
             if value.startswith("user.contacts.email:"):

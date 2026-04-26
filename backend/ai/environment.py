@@ -356,6 +356,7 @@ RESOLVERS: dict[str, str] = {
     # Time
     "time.now":                         "Current timestamp",
     "time.now+{minutes}m":              "Current time plus N minutes. Replace {minutes} with a number.",
+    "time.now-{minutes}m":              "Current time minus N minutes (i.e. N minutes ago). Replace {minutes} with a number. E.g. time.now-1440m = 24 hours ago.",
 
     # GitHub
     "github.repo.default":              "The user's default/primary GitHub repo",
