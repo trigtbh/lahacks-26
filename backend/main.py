@@ -37,6 +37,8 @@ import token_store
 from executor import execute_workflow, execute_workflow_stream, preview_workflow
 from ai.classifier import classify, classify_for_user
 from ai.validator import validate
+from ai.app_resolver import get_available_apps
+from ai.environment import ALLOWED_ACTIONS, INNATE_ACTIONS, CONTROL_ACTIONS
 
 SLACK_CLIENT_ID      = os.environ.get("SLACK_CLIENT_ID", "")
 print(f"SLACK_CLIENT_ID: {SLACK_CLIENT_ID}")
@@ -1232,12 +1234,17 @@ async def workflow_preview(payload: WorkflowPreviewRequest):
         }
 
     errors = validate(workflow)
+    available = await get_available_apps(payload.user_id)
+    all_actions = {**{k: v for k, v in ALLOWED_ACTIONS.items() if k in available}, "innate": INNATE_ACTIONS, "control": CONTROL_ACTIONS}
+    available_skills = [f"{app}.{act}" for app, actions in all_actions.items() for act in actions]
+
     return {
         "trigger_phrase":    workflow.get("trigger_phrase", ""),
         "steps":             workflow.get("steps", []),
         "missing_params":    workflow.get("missing_params", []),
         "confidence":        workflow.get("confidence"),
         "validation_errors": errors,
+        "available_skills":  available_skills,
     }
 
 
@@ -1411,13 +1418,14 @@ async def auth_notion(user_id: str):
 @app.get("/connect/notion/authorize")
 async def auth_notion_callback(code: str, state: str):
     user_id = state
-    logger.info("[auth/notion] callback received user=%s code=%s", user_id, code[:8])
+    redirect_uri = f"{BACKEND_URL}/connect/notion/authorize"
+    logger.info("[auth/notion] callback received user=%s code=%s redirect_uri=%s", user_id, code[:8], redirect_uri)
     credentials = base64.b64encode(f"{NOTION_CLIENT_ID}:{NOTION_CLIENT_SECRET}".encode()).decode()
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             "https://api.notion.com/v1/oauth/token",
             headers={"Authorization": f"Basic {credentials}", "Content-Type": "application/json"},
-            json={"grant_type": "authorization_code", "code": code},
+            json={"grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri, "external_account": {"key": user_id, "name": user_id}},
         )
     data = resp.json()
     logger.info("[auth/notion] token response: %s", data)

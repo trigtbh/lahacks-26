@@ -52,7 +52,7 @@ ALLOWED_ACTIONS: dict[str, dict] = {
     },
 
     "google_people": {
-        "list_connections": {
+        "list_contacts": {
             "required": [],
             "optional": ["limit"],
             "description": "List the user's contacts (connections). Read-only.",
@@ -123,6 +123,11 @@ ALLOWED_ACTIONS: dict[str, dict] = {
             "required": ["page_ref", "content"],
             "optional": [],
             "description": "Append content to an existing Notion page",
+        },
+        "get_page_link": {
+            "required": ["page_ref"],
+            "optional": [],
+            "description": "Get the URL link to a Notion page",
         },
     },
 
@@ -214,11 +219,6 @@ INNATE_ACTIONS: dict[str, dict] = {
         "required": [],
         "optional": ["format", "timezone"],
         "description": "Get current date/time. format: iso (default), human, date_only, time_only.",
-    },
-    "get_user_info": {
-        "required": [],
-        "optional": ["field"],
-        "description": "Get user profile data. field: user_id, email, name. Omit for full profile dict.",
     },
     "set_variable": {
         "required": ["key", "value"],
