@@ -23,6 +23,8 @@ data class EndAudioResponse(
     val agentName: String,
     val workflowStatus: String,
     val workflowMessage: String,
+    val reauthRequired: Boolean = false,
+    val reauthUrl: String = "",
 )
 
 data class WorkflowRequest(
@@ -105,6 +107,8 @@ class FlowApiClient(baseUrl: String) {
                     agentName = res.optString("agent_name", ""),
                     workflowStatus = res.optString("workflow_status", ""),
                     workflowMessage = res.optString("workflow_message", ""),
+                    reauthRequired = res.optBoolean("reauth_required", false),
+                    reauthUrl = res.optString("reauth_url", ""),
                 )
             }
         }

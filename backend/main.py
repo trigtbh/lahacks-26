@@ -420,9 +420,10 @@ async def _classify_workflow_request(user_id: str, transcript: str) -> tuple[dic
         logger.error("[audio/workflow] classify failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=502, detail=f"Workflow classification failed: {exc}")
 
-    intent = workflow.get("intent")
+    import json as _json
+    logger.info("[audio/workflow] classified schema:\n%s", _json.dumps(workflow, indent=2))
 
-    if intent == "denied":
+    if workflow.get("intent") == "denied":
         reason = workflow.get("denial_reason", "None of your connected apps can handle that request.")
         logger.info("[audio/workflow] denied: %s user=%s", reason, user_id)
         return {"workflow_status": "denied", "workflow_message": reason}, []
@@ -682,8 +683,12 @@ async def _confirm_pending_workflow(user_id: str, pending: confirmation_store.Pe
             trigger_phrase=pending.workflow_trigger,
             steps=pending.steps,
         )
-        logger.info("[audio/workflow] created id=%s trigger=%r user=%s",
-                    workflow_id, pending.workflow_trigger, user_id)
+        import json as _json
+        logger.info(
+            "[audio/workflow] created id=%s trigger=%r user=%s\nschema:\n%s",
+            workflow_id, pending.workflow_trigger, user_id,
+            _json.dumps({"trigger_phrase": pending.workflow_trigger, "steps": pending.steps}, indent=2),
+        )
         await audit_store.update_audit_record(pending.audit_id, {
             "status": "created",
             "workflow_id": workflow_id,
@@ -813,72 +818,135 @@ async def audio_end(payload: AudioSessionRequest):
         })
 
     command = _extract_after_flux(transcript)
-
-    # Keep the old action/agent classification code around for reference, but
-    # route the audio flow through workflows only for now.
-    #
-    # action, agent_name = _classify_command(command)
-    # logger.info(f"[audio/end] command={command!r} action={action} agent_name={agent_name!r}")
     action = "workflow"
     agent_name = ""
-    logger.info(f"[audio/end] command={command!r} action={action} agent_name={agent_name!r}")
+    logger.info(f"[audio/end] command={command!r} user={meta['user_id']}")
 
     workflow_response = None
     workflow_spoken_text = command.strip() or transcript.strip()
     if workflow_spoken_text:
-        explicit_create_request = _is_explicit_workflow_creation_request(workflow_spoken_text)
-        pending_confirmation = confirmation_store.get_pending(meta["user_id"])
-        if pending_confirmation and _CONFIRM_RE.match(workflow_spoken_text):
-            confirmation_store.pop_pending(meta["user_id"])
-            workflow_response = await _confirm_pending_workflow(meta["user_id"], pending_confirmation)
-            action = "workflow"
-            agent_name = ""
-        elif pending_confirmation and _DECLINE_RE.match(workflow_spoken_text):
-            confirmation_store.pop_pending(meta["user_id"])
-            await audit_store.update_audit_record(pending_confirmation.audit_id, {
-                "status": "cancelled",
-                "confirmation_utterance": workflow_spoken_text,
-            })
-            workflow_response = {
-                "workflow_status": "cancelled",
-                "workflow_message": "workflow cancelled",
-                "workflow_id": pending_confirmation.workflow_id,
-                "workflow_trigger": pending_confirmation.workflow_trigger,
-                "audit_id": pending_confirmation.audit_id,
-            }
-            action = "workflow"
-            agent_name = ""
-        elif pending_confirmation:
-            workflow_response = {
-                "workflow_status": "awaiting_confirmation",
-                "workflow_message": "please say yes or no",
-                "workflow_id": pending_confirmation.workflow_id,
-                "workflow_trigger": pending_confirmation.workflow_trigger,
-                "workflow_preview": pending_confirmation.preview,
-                "workflow_schema": pending_confirmation.workflow_schema,
-                "audit_id": pending_confirmation.audit_id,
-                "confirmation_required": True,
-            }
-            action = "workflow"
-            agent_name = ""
-        else:
-            existing_workflow = None if explicit_create_request else await workflow_store.find_by_trigger(meta["user_id"], workflow_spoken_text)
-            if existing_workflow:
-                workflow_response = await _prepare_workflow_execution_confirmation(
-                    user_id=meta["user_id"],
-                    transcript=transcript,
-                    command_text=workflow_spoken_text,
-                    doc=existing_workflow,
-                )
+        user_id = meta["user_id"]
+
+        # ── 1. Disconnect intent ──────────────────────────────────────────────
+        if _DISCONNECT_RE.search(workflow_spoken_text):
+            agent_session = sessions.get_session(user_id)
+            if agent_session:
+                sessions.end_session(user_id)
+                reply = f"Disconnected from {agent_session.agent_name}."
+                audio_b64 = await _tts_pcm(reply)
+                action = "disconnect"
+                agent_name = agent_session.agent_name
+                workflow_response = {
+                    "workflow_status": "agent_disconnect",
+                    "workflow_message": reply,
+                    "audio_b64": audio_b64,
+                }
+                logger.info(f"[audio/end] disconnected from {agent_session.agent_name} user={user_id}")
+
+        # ── 2. Connect intent ("talk to X") ──────────────────────────────────
+        elif raw_name := _parse_connect_intent(workflow_spoken_text):
+            hardcoded = _HARDCODED_AGENTS.get(raw_name.lower())
+            if hardcoded:
+                addr, display_name = hardcoded
             else:
-                workflow_response = await _create_workflow_from_transcript(
-                    meta["user_id"],
-                    workflow_spoken_text,
-                    workflow_spoken_text,
-                    force_create=explicit_create_request,
-                )
-            action = "workflow"
-            agent_name = ""
+                result = await find_agent(raw_name)
+                addr, display_name = result if result else (None, None)
+            if addr:
+                sessions.start_session(user_id, addr, display_name)
+                reply = f"Connected to {display_name}. Go ahead."
+                audio_b64 = await _tts_pcm(reply)
+                action = "connect"
+                agent_name = display_name
+                workflow_response = {
+                    "workflow_status": "agent_connect",
+                    "workflow_message": reply,
+                    "audio_b64": audio_b64,
+                }
+                logger.info(f"[audio/end] connected to {display_name} addr={addr} user={user_id}")
+            else:
+                reply = f"Sorry, I couldn't find an agent named '{raw_name}'."
+                audio_b64 = await _tts_pcm(reply)
+                action = "connect_failed"
+                workflow_response = {
+                    "workflow_status": "agent_connect_failed",
+                    "workflow_message": reply,
+                    "audio_b64": audio_b64,
+                }
+
+        # ── 3. Active agent session → forward to agent ────────────────────────
+        elif agent_session := sessions.get_session(user_id):
+            sessions.append_history(user_id, "user", workflow_spoken_text)
+            try:
+                reply = await send_to_agent(agent_session.agent_address, workflow_spoken_text, user_id)
+            except Exception as e:
+                logger.error(f"[audio/end] agent error: {e}", exc_info=True)
+                reply = "The agent didn't respond. Try again."
+            sessions.append_history(user_id, "agent", reply)
+            audio_b64 = await _tts_pcm(reply)
+            action = "agent_message"
+            agent_name = agent_session.agent_name
+            workflow_response = {
+                "workflow_status": "agent_reply",
+                "workflow_message": reply,
+                "audio_b64": audio_b64,
+            }
+            logger.info(f"[audio/end] agent reply from {agent_session.agent_name}: {reply!r}")
+
+        # ── 4. No agent session → workflow classifier ─────────────────────────
+        else:
+            explicit_create_request = _is_explicit_workflow_creation_request(workflow_spoken_text)
+            pending_confirmation = confirmation_store.get_pending(user_id)
+            if pending_confirmation and _CONFIRM_RE.match(workflow_spoken_text):
+                confirmation_store.pop_pending(user_id)
+                workflow_response = await _confirm_pending_workflow(user_id, pending_confirmation)
+                action = "workflow"
+                agent_name = ""
+            elif pending_confirmation and _DECLINE_RE.match(workflow_spoken_text):
+                confirmation_store.pop_pending(user_id)
+                await audit_store.update_audit_record(pending_confirmation.audit_id, {
+                    "status": "cancelled",
+                    "confirmation_utterance": workflow_spoken_text,
+                })
+                workflow_response = {
+                    "workflow_status": "cancelled",
+                    "workflow_message": "workflow cancelled",
+                    "workflow_id": pending_confirmation.workflow_id,
+                    "workflow_trigger": pending_confirmation.workflow_trigger,
+                    "audit_id": pending_confirmation.audit_id,
+                }
+                action = "workflow"
+                agent_name = ""
+            elif pending_confirmation:
+                workflow_response = {
+                    "workflow_status": "awaiting_confirmation",
+                    "workflow_message": "please say yes or no",
+                    "workflow_id": pending_confirmation.workflow_id,
+                    "workflow_trigger": pending_confirmation.workflow_trigger,
+                    "workflow_preview": pending_confirmation.preview,
+                    "workflow_schema": pending_confirmation.workflow_schema,
+                    "audit_id": pending_confirmation.audit_id,
+                    "confirmation_required": True,
+                }
+                action = "workflow"
+                agent_name = ""
+            else:
+                existing_workflow = None if explicit_create_request else await workflow_store.find_by_trigger(user_id, workflow_spoken_text)
+                if existing_workflow:
+                    workflow_response = await _prepare_workflow_execution_confirmation(
+                        user_id=user_id,
+                        transcript=transcript,
+                        command_text=workflow_spoken_text,
+                        doc=existing_workflow,
+                    )
+                else:
+                    workflow_response = await _create_workflow_from_transcript(
+                        user_id,
+                        workflow_spoken_text,
+                        workflow_spoken_text,
+                        force_create=explicit_create_request,
+                    )
+                action = "workflow"
+                agent_name = ""
 
     response = {
         "chunk_id": chunk_id,
