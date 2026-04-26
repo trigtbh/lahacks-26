@@ -1342,14 +1342,16 @@ async def auth_notion(user_id: str):
 @app.get("/connect/notion/authorize")
 async def auth_notion_callback(code: str, state: str):
     user_id = state
+    logger.info("[auth/notion] callback received user=%s code=%s", user_id, code[:8])
     credentials = base64.b64encode(f"{NOTION_CLIENT_ID}:{NOTION_CLIENT_SECRET}".encode()).decode()
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             "https://api.notion.com/v1/oauth/token",
             headers={"Authorization": f"Basic {credentials}", "Content-Type": "application/json"},
-            json={"grant_type": "authorization_code", "code": code, "redirect_uri": f"{BACKEND_URL}/connect/notion/authorize"},
+            json={"grant_type": "authorization_code", "code": code},
         )
     data = resp.json()
+    logger.info("[auth/notion] token response: %s", data)
     if "access_token" not in data:
         raise HTTPException(status_code=400, detail=data.get("error", "Notion OAuth failed"))
 
