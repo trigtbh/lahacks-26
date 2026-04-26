@@ -96,7 +96,7 @@ _INLINE_CONTEXT_RE = re.compile(r'context\.([a-zA-Z_][a-zA-Z0-9_.]*)')
 _INLINE_RESOLVER_RE = re.compile(
     r'time\.today_at:\d{2}:\d{2}'   # time.today_at:HH:MM
     r'|time\.now[+-]\d+m'           # time.now+Xm / time.now-Xm
-    r'|time\.now(?![+-\w])'         # time.now (not followed by + - or word char)
+    r'|time\.now(?![+\-\w])'        # time.now (not followed by + - or word char)
 )
 
 
