@@ -15,11 +15,12 @@ from typing import Any
 
 import httpx
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 import token_store
 import zapier_store
 import google_people
-from google_auth import get_google_creds
+from google_auth import get_google_creds, TokenExpiredError
 from innate_executor import execute_innate, _HANDLERS as _INNATE_HANDLERS
 from ai.condition_eval import evaluate_condition
 from ai.environment import ALLOWED_ACTIONS
@@ -684,6 +685,13 @@ async def preview_workflow(user_id: str, steps: list[dict[str, Any]]) -> dict[st
                 "summary": _summarize_step_preview(app, action, resolved),
                 "status": "ready",
             })
+        except TokenExpiredError:
+            return {
+                "status": "token_expired",
+                "steps": preview_steps,
+                "step_errors": failed_steps,
+                "reauth_required": True,
+            }
         except Exception as exc:
             failed_steps.append({
                 "step": label,
@@ -809,6 +817,17 @@ async def _execute_steps(
             if event_sink is not None:
                 event_sink.append({"type": "step_done", "label": label, "params": resolved})
 
+        except TokenExpiredError:
+            raise
+        except HttpError as exc:
+            if exc.resp.status == 401:
+                raise TokenExpiredError(
+                    f"Google token expired during {label} for user '{user_id}'"
+                ) from exc
+            log.error("%s failed: %s", label, exc, exc_info=True)
+            failed.append({"step": label, "error": str(exc)})
+            if event_sink is not None:
+                event_sink.append({"type": "step_error", "label": label, "error": str(exc)})
         except Exception as exc:
             log.error("%s failed: %s", label, exc, exc_info=True)
             failed.append({"step": label, "error": str(exc)})
@@ -901,10 +920,20 @@ async def execute_workflow(user_id: str, steps: list[dict[str, Any]]) -> dict[st
     completed: list[dict] = []
     failed:    list[dict] = []
 
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as fallback_client:
-        await _execute_steps(
-            user_id, steps, context, fallback_client, completed, failed,
-        )
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as fallback_client:
+            await _execute_steps(
+                user_id, steps, context, fallback_client, completed, failed,
+            )
+    except TokenExpiredError as exc:
+        log.warning("Token expired during workflow execution for user=%s: %s", user_id, exc)
+        return {
+            "status":          "token_expired",
+            "steps_completed": completed,
+            "steps_failed":    failed,
+            "message":         "google token expired",
+            "reauth_required": True,
+        }
 
     status = "success" if not failed else ("failed" if not completed else "partial")
     return {

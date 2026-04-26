@@ -556,6 +556,18 @@ async def _prepare_workflow_execution_confirmation(
         "preview": preview,
     })
 
+    if preview.get("status") == "token_expired":
+        await audit_store.update_audit_record(audit_id, {"status": "token_expired"})
+        return {
+            "workflow_status": "token_expired",
+            "workflow_message": "Your Google account needs to be reconnected.",
+            "workflow_id": workflow_id,
+            "workflow_trigger": doc.get("trigger_phrase", ""),
+            "audit_id": audit_id,
+            "reauth_required": True,
+            "reauth_url": f"{BACKEND_URL}/auth/google?user_id={user_id}",
+        }
+
     if preview.get("status") == "blocked":
         await audit_store.update_audit_record(audit_id, {"status": "preview_failed"})
         return {
@@ -622,6 +634,20 @@ async def _execute_saved_workflow(doc: dict, user_id: str, audit_id: str = "") -
                 workflow_id, doc.get("trigger_phrase"), user_id)
 
     result = await execute_workflow(user_id, doc["steps"])
+
+    if result.get("reauth_required"):
+        if audit_id:
+            await audit_store.update_audit_record(audit_id, {"status": "token_expired"})
+        return {
+            "workflow_status": "token_expired",
+            "workflow_message": "Your Google account needs to be reconnected.",
+            "workflow_id": workflow_id,
+            "workflow_trigger": doc.get("trigger_phrase", ""),
+            "audit_id": audit_id,
+            "reauth_required": True,
+            "reauth_url": f"{BACKEND_URL}/auth/google?user_id={user_id}",
+        }
+
     workflow_status = "executed" if result["status"] == "success" else result["status"]
     workflow_message = _build_result_message(result) if result["status"] == "success" else result.get("message", "workflow failed")
 
