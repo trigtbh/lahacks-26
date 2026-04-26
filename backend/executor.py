@@ -66,6 +66,14 @@ def _resolve_static(value: Any) -> Any:
             return (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
         except ValueError:
             pass
+    # time.today_at:HH:MM  →  today at that hour/minute in UTC, as ISO string
+    if value.startswith("time.today_at:"):
+        try:
+            hh, mm = value[len("time.today_at:"):].split(":")
+            now = datetime.now(timezone.utc)
+            return now.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0).isoformat()
+        except (ValueError, AttributeError):
+            pass
     return value
 
 
@@ -231,19 +239,59 @@ async def _gmail_draft_email(user_id: str, params: dict) -> None:
     log.info("Gmail draft created for %s", to)
 
 
+_GMAIL_DATE_OP_RE = re.compile(
+    r'\b(after|before):(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:[+-]\d{2}:\d{2}|Z)?)'
+)
+
+
+def _normalize_gmail_query(query: str) -> str:
+    """
+    Fix two common Gemma mistakes in Gmail search queries:
+
+    1. Strips outer double-quotes that wrap the entire query.
+       Gmail treats "foo bar" as an exact phrase; Gemma uses it for keyword search,
+       so we remove the quotes so Gmail sees: foo bar (both words, anywhere).
+
+    2. Converts after:/before: ISO-8601 timestamps to Unix epoch integers.
+       Gmail only understands epoch seconds or YYYY/MM/DD in date operators;
+       ISO strings are silently ignored, making date filters do nothing.
+    """
+    query = query.strip()
+
+    # Strip outer quotes when they wrap the entire query (not an intentional phrase)
+    if query.startswith('"') and query.endswith('"') and query.count('"') == 2:
+        query = query[1:-1].strip()
+
+    # Convert ISO timestamps in after:/before: to Unix epoch
+    def _to_epoch(m: re.Match) -> str:
+        try:
+            dt = datetime.fromisoformat(m.group(2).replace("Z", "+00:00"))
+            return f"{m.group(1)}:{int(dt.timestamp())}"
+        except ValueError:
+            return m.group(0)
+
+    query = _GMAIL_DATE_OP_RE.sub(_to_epoch, query)
+    return query
+
+
 async def _gmail_search_email(user_id: str, params: dict) -> list[dict]:
     creds = await get_google_creds(user_id)
     service = build("gmail", "v1", credentials=creds)
 
+    raw_query = params["query"]
+    query = _normalize_gmail_query(raw_query)
+    if query != raw_query:
+        log.info("Gmail query normalized: %r → %r", raw_query, query)
+
     max_results = int(params.get("max_results", 5))
     result = service.users().messages().list(
         userId="me",
-        q=params["query"],
+        q=query,
         maxResults=max_results,
     ).execute()
 
     messages = result.get("messages", [])
-    log.info("Gmail search %r → %d result(s)", params["query"], len(messages))
+    log.info("Gmail search %r → %d result(s)", query, len(messages))
     return messages
 
 

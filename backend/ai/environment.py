@@ -350,9 +350,10 @@ RESOLVERS: dict[str, str] = {
     "user.contacts.email:{name}":       "Look up someone's email by name. Replace {name} with their name.",
 
     # Time
-    "time.now":                         "Current timestamp",
-    "time.now+{minutes}m":              "Current time plus N minutes. Replace {minutes} with a number.",
-    "time.now-{minutes}m":              "Current time minus N minutes (i.e. N minutes ago). Replace {minutes} with a number. E.g. time.now-1440m = 24 hours ago.",
+    "time.now":                         "Current timestamp (ISO-8601).",
+    "time.now+{minutes}m":              "Current time plus N minutes. Use for relative offsets only (e.g. 'in 30 minutes'). Do NOT use for clock times like '6 AM'.",
+    "time.now-{minutes}m":              "Current time minus N minutes (i.e. N minutes ago). Use for relative offsets only. E.g. time.now-1440m = 24 hours ago.",
+    "time.today_at:{HH}:{MM}":          "Today at a specific clock time (24-hour UTC). Use this for absolute times of day. E.g. time.today_at:06:00 = today at 6 AM, time.today_at:21:00 = today at 9 PM. ALWAYS use this instead of time.now+Xm when the user specifies a clock time.",
 
     # GitHub
     "github.repo.default":              "The user's default/primary GitHub repo",
