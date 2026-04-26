@@ -149,10 +149,10 @@ async def _datetime_math(user_id: str, params: dict, context: dict) -> str:
     from datetime import timedelta
     
     base_time_str = str(params.get("base_time", ""))
-    operation = str(params.get("operation", "add")).lower()
+    operation = str(params.get("operation", "add")).lower().strip()
     amount = abs(float(params.get("amount", 0)))  # sign comes from operation, not amount
-    unit = str(params.get("unit", "days")).lower()
-    fmt = str(params.get("format", "iso")).lower()
+    unit = str(params.get("unit", "days")).lower().strip()
+    fmt = str(params.get("format", "iso")).lower().strip()
     
     try:
         base_time = datetime.fromisoformat(base_time_str.replace("Z", "+00:00"))
@@ -174,8 +174,16 @@ async def _datetime_math(user_id: str, params: dict, context: dict) -> str:
         delta = timedelta(seconds=amount)
     else:
         delta = timedelta(days=amount)
+
+    # Robust subtract detection: the LLM may send "subtract", "sub", "minus",
+    # "-", "–" (en-dash), "—" (em-dash), "−" (Unicode minus U+2212), etc.
+    _SUBTRACT_TOKENS = {
+        "subtract", "sub", "minus", "-", "–", "—", "−",
+        "before", "ago", "back", "earlier",
+    }
+    is_subtract = operation in _SUBTRACT_TOKENS
         
-    if operation == "subtract":
+    if is_subtract:
         result_time = base_time - delta
     else:
         result_time = base_time + delta
