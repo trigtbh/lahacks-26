@@ -1392,7 +1392,7 @@ async def auth_notion_callback(code: str, state: str):
         resp = await client.post(
             "https://api.notion.com/v1/oauth/token",
             headers={"Authorization": f"Basic {credentials}", "Content-Type": "application/json"},
-            json={"grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri},
+            json={"grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri, "external_account": {"key": user_id, "name": user_id}},
         )
     data = resp.json()
     logger.info("[auth/notion] token response: %s", data)
