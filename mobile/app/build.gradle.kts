@@ -9,6 +9,10 @@ fun localProp(key: String) = localProps.getProperty(key)
     ?: System.getenv(key.uppercase().replace(".", "_"))
     ?: ""
 
+fun localPropOrDefault(key: String, default: String) = localProps.getProperty(key)
+    ?: System.getenv(key.uppercase().replace(".", "_"))
+    ?: default
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -35,6 +39,9 @@ android {
         buildConfigField("String", "MWDAT_CLIENT_TOKEN", "\"${localProp("mwdat_client_token")}\"")
         buildConfigField("String", "FLOW_API_BASE_URL", "\"${localProp("flow_api_base_url")}\"")
         buildConfigField("String", "FLOW_USER_ID", "\"${localProp("flow_user_id")}\"")
+        buildConfigField("double", "VAD_MIN_SPEECH_RMS", localPropOrDefault("vad_min_speech_rms", "28.0"))
+        buildConfigField("double", "VAD_MIN_SPEECH_DELTA", localPropOrDefault("vad_min_speech_delta", "10.0"))
+        buildConfigField("int", "VAD_START_TRIGGER_CHUNKS", localPropOrDefault("vad_start_trigger_chunks", "2"))
     }
 
     buildTypes {

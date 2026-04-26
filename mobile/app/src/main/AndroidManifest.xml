@@ -19,7 +19,7 @@
 
     <application
         android:name=".FlowApplication"
-        android:label="Flow"
+        android:label="Chad"
         android:theme="@style/Theme.AppCompat.DayNight.NoActionBar"
         android:supportsRtl="true"
         android:networkSecurityConfig="@xml/network_security_config">

@@ -53,7 +53,7 @@ fun FlowScreen(viewModel: FlowViewModel) {
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(text = "Flux", style = MaterialTheme.typography.displayLarge)
+            Text(text = "Chad", style = MaterialTheme.typography.displayLarge)
             Spacer(modifier = Modifier.height(16.dp))
             Text(text = state.statusMessage, style = MaterialTheme.typography.bodyLarge)
 

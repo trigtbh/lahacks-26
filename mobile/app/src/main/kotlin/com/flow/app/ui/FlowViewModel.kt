@@ -40,7 +40,7 @@ class FlowViewModel(app: Application) : AndroidViewModel(app) {
             FluxEvents.triggerDetected.collect { transcript ->
                 _uiState.value = _uiState.value.copy(
                     statusMessage = "Go ahead...",
-                    triggerMessage = "Flux heard: \"$transcript\""
+                    triggerMessage = "Chad heard: \"$transcript\""
                 )
             }
         }
