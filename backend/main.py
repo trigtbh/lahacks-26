@@ -16,7 +16,7 @@ from urllib.parse import urlencode, urlparse
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -24,7 +24,7 @@ from elevenlabs.client import AsyncElevenLabs
 from deepgram import DeepgramClient, PrerecordedOptions
 
 
-from agentverse_client import find_agent, send_to_agent, start_gateway
+from agentverse_client import find_agent, send_to_agent
 import session_store as sessions
 
 # ── Workflow pipeline ─────────────────────────────────────────────────────────
@@ -35,8 +35,10 @@ import workflow_store
 import zapier_store
 import token_store
 from executor import execute_workflow, execute_workflow_stream, preview_workflow
-from ai.classifier import classify, classify_for_user
+from ai.classifier import classify_for_user
 from ai.validator import validate
+from ai.app_resolver import get_available_apps
+from ai.environment import ALLOWED_ACTIONS, INNATE_ACTIONS, CONTROL_ACTIONS
 
 SLACK_CLIENT_ID      = os.environ.get("SLACK_CLIENT_ID", "")
 print(f"SLACK_CLIENT_ID: {SLACK_CLIENT_ID}")
@@ -73,6 +75,7 @@ if not GOOGLE_CLIENT_SECRET:
 
 _GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/calendar",
     "https://www.googleapis.com/auth/contacts.readonly",
     "https://www.googleapis.com/auth/drive",
@@ -176,7 +179,6 @@ def _parse_connect_intent(text: str) -> str | None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    start_gateway()
     yield
 
 _BASE_DIR       = Path(__file__).parent
@@ -418,21 +420,26 @@ async def _classify_workflow_request(user_id: str, transcript: str) -> tuple[dic
         logger.error("[audio/workflow] classify failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=502, detail=f"Workflow classification failed: {exc}")
 
+    import json as _json
+    logger.info("[audio/workflow] classified schema:\n%s", _json.dumps(workflow, indent=2))
+
     if workflow.get("intent") == "denied":
         reason = workflow.get("denial_reason", "None of your connected apps can handle that request.")
         logger.info("[audio/workflow] denied: %s user=%s", reason, user_id)
-        return {"workflow_status": "denied", "workflow_message": reason}
+        return {"workflow_status": "denied", "workflow_message": reason}, []
+
+    intent = workflow.get("intent")
+    if intent == "other" or not workflow.get("trigger_phrase", "").strip():
+        logger.info("[audio/workflow] not a workflow request user=%s intent=%r", user_id, intent)
+        return {"workflow_status": "not_workflow", "workflow_message": "I didn't understand that as a workflow. Try saying what you want to automate."}, []
 
     validation_errors = validate(workflow)
     if validation_errors:
         logger.warning("[audio/workflow] validation errors: %s", validation_errors)
 
-    trigger_phrase = workflow.get("trigger_phrase", "").strip()
     steps = workflow.get("steps", [])
-    if not trigger_phrase:
-        raise HTTPException(status_code=422, detail="Classifier returned no trigger_phrase")
     if not steps:
-        raise HTTPException(status_code=422, detail="Classifier returned no workflow steps")
+        return {"workflow_status": "not_workflow", "workflow_message": "I couldn't figure out the steps for that workflow."}, []
 
     return workflow, validation_errors
 
@@ -484,6 +491,8 @@ async def _create_workflow_from_transcript(
     force_create: bool = False,
 ) -> dict:
     workflow, validation_errors = await _classify_workflow_request(user_id, transcript)
+    if workflow.get("workflow_status") in ("denied", "not_workflow"):
+        return workflow
     trigger_phrase = workflow.get("trigger_phrase", "").strip()
     steps = workflow.get("steps", [])
 
@@ -556,6 +565,18 @@ async def _prepare_workflow_execution_confirmation(
         "preview": preview,
     })
 
+    if preview.get("status") == "token_expired":
+        await audit_store.update_audit_record(audit_id, {"status": "token_expired"})
+        return {
+            "workflow_status": "token_expired",
+            "workflow_message": "Your Google account needs to be reconnected.",
+            "workflow_id": workflow_id,
+            "workflow_trigger": doc.get("trigger_phrase", ""),
+            "audit_id": audit_id,
+            "reauth_required": True,
+            "reauth_url": f"{BACKEND_URL}/auth/google?user_id={user_id}",
+        }
+
     if preview.get("status") == "blocked":
         await audit_store.update_audit_record(audit_id, {"status": "preview_failed"})
         return {
@@ -622,6 +643,20 @@ async def _execute_saved_workflow(doc: dict, user_id: str, audit_id: str = "") -
                 workflow_id, doc.get("trigger_phrase"), user_id)
 
     result = await execute_workflow(user_id, doc["steps"])
+
+    if result.get("reauth_required"):
+        if audit_id:
+            await audit_store.update_audit_record(audit_id, {"status": "token_expired"})
+        return {
+            "workflow_status": "token_expired",
+            "workflow_message": "Your Google account needs to be reconnected.",
+            "workflow_id": workflow_id,
+            "workflow_trigger": doc.get("trigger_phrase", ""),
+            "audit_id": audit_id,
+            "reauth_required": True,
+            "reauth_url": f"{BACKEND_URL}/auth/google?user_id={user_id}",
+        }
+
     workflow_status = "executed" if result["status"] == "success" else result["status"]
     workflow_message = _build_result_message(result) if result["status"] == "success" else result.get("message", "workflow failed")
 
@@ -649,8 +684,12 @@ async def _confirm_pending_workflow(user_id: str, pending: confirmation_store.Pe
             trigger_phrase=pending.workflow_trigger,
             steps=pending.steps,
         )
-        logger.info("[audio/workflow] created id=%s trigger=%r user=%s",
-                    workflow_id, pending.workflow_trigger, user_id)
+        import json as _json
+        logger.info(
+            "[audio/workflow] created id=%s trigger=%r user=%s\nschema:\n%s",
+            workflow_id, pending.workflow_trigger, user_id,
+            _json.dumps({"trigger_phrase": pending.workflow_trigger, "steps": pending.steps}, indent=2),
+        )
         await audit_store.update_audit_record(pending.audit_id, {
             "status": "created",
             "workflow_id": workflow_id,
@@ -780,72 +819,163 @@ async def audio_end(payload: AudioSessionRequest):
         })
 
     command = _extract_after_flux(transcript)
+    spoken_text = command.strip() or transcript.strip()
+    spoken_clean = spoken_text.rstrip(".!?,;")
 
-    # Keep the old action/agent classification code around for reference, but
-    # route the audio flow through workflows only for now.
-    #
-    # action, agent_name = _classify_command(command)
-    # logger.info(f"[audio/end] command={command!r} action={action} agent_name={agent_name!r}")
+    # ── AgentVerse chat routing (takes priority over workflow pipeline) ────────
+
+    # Disconnect intent ends any active agent session
+    if _DISCONNECT_RE.search(spoken_text):
+        av_session = sessions.get_session(meta["user_id"])
+        if av_session:
+            sessions.end_session(meta["user_id"])
+            reply_text = f"Disconnected from {av_session.agent_name}."
+            logger.info(f"[audio/end] agentverse_disconnect agent={av_session.agent_name!r}")
+            return JSONResponse({
+                "chunk_id": chunk_id,
+                "user_id": meta["user_id"],
+                "transcript": transcript,
+                "command": command,
+                "action": "agentverse_disconnect",
+                "agent_name": av_session.agent_name,
+                "reply": reply_text,
+            })
+
+    # "Talk to X" / "Connect to X" — start an AgentVerse session
+    raw_name = _parse_connect_intent(spoken_clean)
+    if raw_name:
+        hardcoded = _HARDCODED_AGENTS.get(raw_name.lower())
+        if hardcoded:
+            av_address, av_display_name = hardcoded
+        else:
+            av_result = await find_agent(raw_name)
+            if not av_result:
+                reply_text = f"Sorry, I couldn't find an agent named '{raw_name}' on Agentverse."
+                logger.info(f"[audio/end] agentverse_connect_failed name={raw_name!r}")
+                return JSONResponse({
+                    "chunk_id": chunk_id,
+                    "user_id": meta["user_id"],
+                    "transcript": transcript,
+                    "command": command,
+                    "action": "agentverse_connect_failed",
+                    "agent_name": raw_name,
+                    "reply": reply_text,
+                })
+            av_address, av_display_name = av_result
+        sessions.start_session(meta["user_id"], av_address, av_display_name)
+        reply_text = f"Connected to {av_display_name}. Go ahead."
+        logger.info(f"[audio/end] agentverse_connect agent={av_display_name!r} addr={av_address} reply={reply_text!r}")
+        return JSONResponse({
+            "chunk_id": chunk_id,
+            "user_id": meta["user_id"],
+            "transcript": transcript,
+            "command": command,
+            "action": "agentverse_connect",
+            "agent_name": av_display_name,
+            "reply": reply_text,
+        })
+
+    # Active agent session — forward every utterance to the agent
+    av_session = sessions.get_session(meta["user_id"])
+    if av_session:
+        try:
+            reply_text = await send_to_agent(av_session.agent_address, spoken_text, meta["user_id"])
+            sessions.append_history(meta["user_id"], "user", spoken_text)
+            sessions.append_history(meta["user_id"], "agent", reply_text)
+            logger.info(f"[audio/end] agentverse_chat agent={av_session.agent_name!r} reply={reply_text!r}")
+            return JSONResponse({
+                "chunk_id": chunk_id,
+                "user_id": meta["user_id"],
+                "transcript": transcript,
+                "command": command,
+                "action": "agentverse_chat",
+                "agent_name": av_session.agent_name,
+                "reply": reply_text,
+            })
+        except Exception as e:
+            logger.error(f"[audio/end] AgentVerse error: {e}", exc_info=True)
+            reply_text = f"Sorry, I had trouble reaching {av_session.agent_name}. Please try again."
+            return JSONResponse({
+                "chunk_id": chunk_id,
+                "user_id": meta["user_id"],
+                "transcript": transcript,
+                "command": command,
+                "action": "agentverse_error",
+                "agent_name": av_session.agent_name,
+                "reply": reply_text,
+            })
+
+    # ── Fall through to workflow pipeline ──────────────────────────────────────
     action = "workflow"
     agent_name = ""
-    logger.info(f"[audio/end] command={command!r} action={action} agent_name={agent_name!r}")
+    logger.info(f"[audio/end] command={command!r} user={meta['user_id']}")
 
     workflow_response = None
     workflow_spoken_text = command.strip() or transcript.strip()
     if workflow_spoken_text:
-        explicit_create_request = _is_explicit_workflow_creation_request(workflow_spoken_text)
-        pending_confirmation = confirmation_store.get_pending(meta["user_id"])
-        if pending_confirmation and _CONFIRM_RE.match(workflow_spoken_text):
-            confirmation_store.pop_pending(meta["user_id"])
-            workflow_response = await _confirm_pending_workflow(meta["user_id"], pending_confirmation)
-            action = "workflow"
-            agent_name = ""
-        elif pending_confirmation and _DECLINE_RE.match(workflow_spoken_text):
-            confirmation_store.pop_pending(meta["user_id"])
-            await audit_store.update_audit_record(pending_confirmation.audit_id, {
-                "status": "cancelled",
-                "confirmation_utterance": workflow_spoken_text,
-            })
-            workflow_response = {
-                "workflow_status": "cancelled",
-                "workflow_message": "workflow cancelled",
-                "workflow_id": pending_confirmation.workflow_id,
-                "workflow_trigger": pending_confirmation.workflow_trigger,
-                "audit_id": pending_confirmation.audit_id,
-            }
-            action = "workflow"
-            agent_name = ""
-        elif pending_confirmation:
-            workflow_response = {
-                "workflow_status": "awaiting_confirmation",
-                "workflow_message": "please say yes or no",
-                "workflow_id": pending_confirmation.workflow_id,
-                "workflow_trigger": pending_confirmation.workflow_trigger,
-                "workflow_preview": pending_confirmation.preview,
-                "workflow_schema": pending_confirmation.workflow_schema,
-                "audit_id": pending_confirmation.audit_id,
-                "confirmation_required": True,
-            }
-            action = "workflow"
-            agent_name = ""
+        user_id = meta["user_id"]
+
+        # Connect intent → tell Android to call /workflow/execute "talk to {name}"
+        if raw_name := _parse_connect_intent(workflow_spoken_text):
+            action = "agentverse_search"
+            agent_name = raw_name
+            logger.info(f"[audio/end] connect intent detected name={raw_name!r} user={user_id}")
+
+        # Workflow classifier path
         else:
-            existing_workflow = None if explicit_create_request else await workflow_store.find_by_trigger(meta["user_id"], workflow_spoken_text)
-            if existing_workflow:
-                workflow_response = await _prepare_workflow_execution_confirmation(
-                    user_id=meta["user_id"],
-                    transcript=transcript,
-                    command_text=workflow_spoken_text,
-                    doc=existing_workflow,
-                )
+            explicit_create_request = _is_explicit_workflow_creation_request(workflow_spoken_text)
+            pending_confirmation = confirmation_store.get_pending(user_id)
+            if pending_confirmation and _CONFIRM_RE.match(workflow_spoken_text):
+                confirmation_store.pop_pending(user_id)
+                workflow_response = await _confirm_pending_workflow(user_id, pending_confirmation)
+                action = "workflow"
+                agent_name = ""
+            elif pending_confirmation and _DECLINE_RE.match(workflow_spoken_text):
+                confirmation_store.pop_pending(user_id)
+                await audit_store.update_audit_record(pending_confirmation.audit_id, {
+                    "status": "cancelled",
+                    "confirmation_utterance": workflow_spoken_text,
+                })
+                workflow_response = {
+                    "workflow_status": "cancelled",
+                    "workflow_message": "workflow cancelled",
+                    "workflow_id": pending_confirmation.workflow_id,
+                    "workflow_trigger": pending_confirmation.workflow_trigger,
+                    "audit_id": pending_confirmation.audit_id,
+                }
+                action = "workflow"
+                agent_name = ""
+            elif pending_confirmation:
+                workflow_response = {
+                    "workflow_status": "awaiting_confirmation",
+                    "workflow_message": "please say yes or no",
+                    "workflow_id": pending_confirmation.workflow_id,
+                    "workflow_trigger": pending_confirmation.workflow_trigger,
+                    "workflow_preview": pending_confirmation.preview,
+                    "workflow_schema": pending_confirmation.workflow_schema,
+                    "audit_id": pending_confirmation.audit_id,
+                    "confirmation_required": True,
+                }
+                action = "workflow"
+                agent_name = ""
             else:
-                workflow_response = await _create_workflow_from_transcript(
-                    meta["user_id"],
-                    workflow_spoken_text,
-                    workflow_spoken_text,
-                    force_create=explicit_create_request,
-                )
-            action = "workflow"
-            agent_name = ""
+                existing_workflow = None if explicit_create_request else await workflow_store.find_by_trigger(user_id, workflow_spoken_text)
+                if existing_workflow:
+                    workflow_response = await _prepare_workflow_execution_confirmation(
+                        user_id=user_id,
+                        transcript=transcript,
+                        command_text=workflow_spoken_text,
+                        doc=existing_workflow,
+                    )
+                else:
+                    workflow_response = await _create_workflow_from_transcript(
+                        user_id,
+                        workflow_spoken_text,
+                        workflow_spoken_text,
+                        force_create=explicit_create_request,
+                    )
+                action = "workflow"
+                agent_name = ""
 
     response = {
         "chunk_id": chunk_id,
@@ -915,16 +1045,18 @@ async def workflow_execute(payload: WorkflowRequest):
         return await _respond("connect", [f"Connected to {display_name}"],
                               f"Connected to {display_name}. Go ahead.")
 
-    # 3. Route to active agent session via uAgents gateway
+    # 3. Route to active agent session
     session = sessions.get_session(user_id)
     if session:
-        sessions.append_history(user_id, "user", text)
+        # Strip wake word — Android sends full transcript e.g. "Hey Flux, next train to SF"
+        message = _extract_after_flux(text) or text
+        sessions.append_history(user_id, "user", message)
         try:
-            reply = await send_to_agent(session.agent_address, text, user_id)
+            reply = await send_to_agent(session.agent_address, message, user_id)
         except TimeoutError:
             reply = "The agent didn't respond in time. Try again."
         except Exception as e:
-            logger.error(f"[workflow/execute] gateway error: {e}", exc_info=True)
+            logger.error(f"[workflow/execute] agent error: {e}", exc_info=True)
             reply = "Something went wrong reaching the agent. Try again."
         sessions.append_history(user_id, "agent", reply)
         return await _respond("agent_message", [f"Sent to {session.agent_name}"], reply)
@@ -1206,12 +1338,17 @@ async def workflow_preview(payload: WorkflowPreviewRequest):
         }
 
     errors = validate(workflow)
+    available = await get_available_apps(payload.user_id)
+    all_actions = {**{k: v for k, v in ALLOWED_ACTIONS.items() if k in available}, "innate": INNATE_ACTIONS, "control": CONTROL_ACTIONS}
+    available_skills = [f"{app}.{act}" for app, actions in all_actions.items() for act in actions]
+
     return {
         "trigger_phrase":    workflow.get("trigger_phrase", ""),
         "steps":             workflow.get("steps", []),
         "missing_params":    workflow.get("missing_params", []),
         "confidence":        workflow.get("confidence"),
         "validation_errors": errors,
+        "available_skills":  available_skills,
     }
 
 
@@ -1234,6 +1371,62 @@ async def workflow_execute_stream(payload: WorkflowExecuteStreamRequest):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# INFER ENDPOINTS  (/infer page + infer-preview + infer-execute-stream)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/infer", response_class=HTMLResponse)
+async def infer_page():
+    """Serve the integration-aware infer UI."""
+    html_path = _BASE_DIR / "infer_page.html"
+    return HTMLResponse(html_path.read_text())
+
+
+class InferRequest(BaseModel):
+    user_id: str
+    prompt:  str
+
+
+@app.post("/infer/query")
+async def infer_query(payload: InferRequest):
+    """
+    Stage 1 + 2: integration analysis + substep plan with real API calls.
+    """
+    from ai.infer_classifier import infer_for_user
+    logger.info("[infer/query] user=%s prompt=%r", payload.user_id, payload.prompt)
+    try:
+        result = await infer_for_user(payload.prompt, payload.user_id)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Inference failed: {exc}")
+    return result
+
+
+class InferClarifyRequest(BaseModel):
+    user_id:          str
+    original_query:   str
+    previous_substeps: list
+    clarifications:   dict  # { "question text": "answer text" }
+
+
+@app.post("/infer/clarify")
+async def infer_clarify(payload: InferClarifyRequest):
+    """
+    Re-run substep planning after user has answered clarification questions.
+    """
+    from ai.infer_classifier import clarify_for_user
+    logger.info("[infer/clarify] user=%s query=%r", payload.user_id, payload.original_query)
+    try:
+        result = await clarify_for_user(
+            payload.original_query,
+            payload.user_id,
+            payload.previous_substeps,
+            payload.clarifications,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Clarification failed: {exc}")
+    return result
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

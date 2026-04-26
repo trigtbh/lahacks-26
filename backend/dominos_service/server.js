@@ -1,12 +1,11 @@
 import express from 'express';
-import { NearbyStores, Customer, Item, Order, Payment } from 'dominos';
+import { NearbyStores, Customer, Item, Order, Payment, Address } from 'dominos';
 
 const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 3001;
 
-// Default item codes by size/type
 const ITEM_CODES = {
   'small':   '10SCREEN',
   'medium':  '12SCREEN',
@@ -44,7 +43,6 @@ async function findNearestDeliveryStore(address) {
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
 // POST /nearby-stores
-// Body: { address: string }
 app.post('/nearby-stores', async (req, res) => {
   try {
     const { address } = req.body;
@@ -52,40 +50,47 @@ app.post('/nearby-stores', async (req, res) => {
     const result = await findNearestDeliveryStore(address);
     res.json(result);
   } catch (err) {
+    console.error('[nearby-stores] error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
 // POST /order
-// Body: {
-//   address, firstName, lastName, phone, email,
-//   items: [{ code?, size?, quantity?, options? }],   — defaults to 14" hand tossed
-//   payment?: { number, expiration, securityCode, postalCode, tipAmount }
-// }
 app.post('/order', async (req, res) => {
+  console.log('[order] request:', JSON.stringify(req.body, null, 2));
   try {
     const {
-      address, firstName = 'Customer', lastName = '', phone = '555-555-5555', email = '',
+      address: rawAddress,
+      firstName = 'Customer', lastName = '', phone = '5555555555', email = '',
       items = [{ code: ITEM_CODES.default }],
       payment,
     } = req.body;
 
-    if (!address) return res.status(400).json({ error: 'address required' });
+    if (!rawAddress) return res.status(400).json({ error: 'address required' });
+
+    // Use Address object for reliable parsing
+    const address = new Address(rawAddress);
+    console.log('[order] parsed address:', address);
 
     const customer = new Customer({ address, firstName, lastName, phone, email });
     const { storeID, distance } = await findNearestDeliveryStore(address);
+    console.log('[order] storeID:', storeID, 'distance:', distance);
 
     const order = new Order(customer);
     order.storeID = storeID;
 
     for (const item of items) {
       const code = resolveItemCode(item);
+      console.log('[order] adding item code:', code, 'options:', item.options);
       const domItem = new Item({ code, ...(item.options ? { options: item.options } : {}) });
       order.addItem(domItem);
     }
 
+    console.log('[order] validating...');
     await order.validate();
+    console.log('[order] pricing...');
     await order.price();
+    console.log('[order] price:', order.amountsBreakdown?.customer);
 
     const result = {
       storeID,
@@ -104,14 +109,18 @@ app.post('/order', async (req, res) => {
         tipAmount:    payment.tipAmount ?? 3,
       });
       order.payments.push(card);
+      console.log('[order] placing order...');
       await order.place();
       result.placed = true;
       result.orderID = order.orderID ?? null;
+      console.log('[order] placed! orderID:', result.orderID);
     }
 
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('[order] error:', err.message);
+    console.error('[order] stack:', err.stack);
+    res.status(500).json({ error: err.message, stack: err.stack });
   }
 });
 

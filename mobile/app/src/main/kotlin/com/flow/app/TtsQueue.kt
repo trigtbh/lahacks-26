@@ -62,8 +62,9 @@ object TtsQueue {
     }
 
     private suspend fun playPcmSync(pcm: ByteArray) = withContext(Dispatchers.IO) {
+        val sampleRate = AudioCaptureManager.SAMPLE_RATE
         val bufferSize = AudioTrack.getMinBufferSize(
-            AudioCaptureManager.SAMPLE_RATE,
+            sampleRate,
             AudioFormat.CHANNEL_OUT_MONO,
             AudioCaptureManager.AUDIO_FORMAT,
         )
@@ -76,7 +77,7 @@ object TtsQueue {
             )
             .setAudioFormat(
                 AudioFormat.Builder()
-                    .setSampleRate(AudioCaptureManager.SAMPLE_RATE)
+                    .setSampleRate(sampleRate)
                     .setEncoding(AudioCaptureManager.AUDIO_FORMAT)
                     .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                     .build()
@@ -86,6 +87,10 @@ object TtsQueue {
             .build()
         track.play()
         track.write(pcm, 0, pcm.size)
+        // write() returns when data is queued into the internal buffer, not when
+        // playback finishes. Wait for the remaining buffer to drain before stopping.
+        val bufferDrainMs = (bufferSize.toLong() * 1000L) / (sampleRate.toLong() * 2L)
+        delay(bufferDrainMs + 300L)
         track.stop()
         track.release()
     }

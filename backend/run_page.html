@@ -169,6 +169,18 @@
   .param-key { color: var(--muted); }
   .param-val { color: var(--text2); }
 
+  .step-url {
+    font-size: 10px;
+    color: var(--muted);
+    margin-top: 5px;
+    word-break: break-all;
+  }
+  .step-url .method {
+    color: var(--running);
+    font-weight: 700;
+    margin-right: 4px;
+  }
+
   .step-error-msg {
     font-size: 11px;
     color: var(--error);
@@ -242,6 +254,9 @@
   <div id="workflow-section" style="display:none">
     <hr class="divider">
 
+    <div class="section-title">Available Skills Context</div>
+    <div id="skills-container" style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:24px;"></div>
+
     <div class="section-title">Generated Workflow</div>
 
     <div class="meta-row" id="meta-row"></div>
@@ -285,6 +300,12 @@ function paramsHTML(params) {
   return `<div class="step-params">${items}</div>`;
 }
 
+function resultHTML(result) {
+  if (result === undefined || result === null || result === "") return '';
+  const val = typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result);
+  return `<div class="step-result" style="margin-top:8px; padding:8px; background:#1a1a1a; border:1px solid #2a2a2a; border-radius:4px; color:var(--text2); font-size:11px; white-space:pre-wrap; word-break:break-word;"><strong>Output:</strong>\n${val}</div>`;
+}
+
 function renderSteps(steps) {
   const list = document.getElementById('steps-list');
   list.innerHTML = '';
@@ -317,12 +338,26 @@ function setStepState(index, state, extra) {
   const icons = { pending: '○', running: '◌', done: '✓', error: '✕' };
   icon.className = `step-icon ${state}`;
   icon.textContent = icons[state];
-  if (state === 'done' && extra?.params) {
+  if (state === 'done' && extra) {
     const body = card.querySelector('.step-body');
-    const existing = body.querySelector('.step-params');
-    const newParams = paramsHTML(extra.params);
-    if (existing) existing.outerHTML = newParams;
-    else body.insertAdjacentHTML('beforeend', newParams);
+    if (extra.url) {
+      const existing = body.querySelector('.step-url');
+      const parts = extra.url.match(/^(\S+)\s+(.+)$/);
+      const urlHTML = parts
+        ? `<div class="step-url"><span class="method">${parts[1]}</span>${parts[2]}</div>`
+        : `<div class="step-url">${extra.url}</div>`;
+      if (existing) existing.outerHTML = urlHTML;
+      else body.insertAdjacentHTML('afterbegin', urlHTML);
+    }
+    if (extra.params) {
+      const existing = body.querySelector('.step-params');
+      const newParams = paramsHTML(extra.params);
+      if (existing) existing.outerHTML = newParams;
+      else body.insertAdjacentHTML('beforeend', newParams);
+    }
+    if (extra.result !== undefined) {
+      body.insertAdjacentHTML('beforeend', resultHTML(extra.result));
+    }
   }
   if (state === 'error' && extra?.error) {
     const errEl = document.getElementById(`step-err-${index}`);
@@ -378,6 +413,14 @@ function displayWorkflow(data) {
     <div class="meta-item"><span style="color:var(--muted)">steps: </span><strong>${data.steps.length}</strong></div>
     <div class="meta-item"><span style="color:var(--muted)">confidence: </span><strong>${conf}</strong></div>
   `;
+
+  // Skills
+  const skillsBox = document.getElementById('skills-container');
+  if (data.available_skills && data.available_skills.length) {
+    skillsBox.innerHTML = data.available_skills.map(s => `<span class="badge" style="border-color:var(--border); color:var(--text2); background:var(--bg); padding:3px 6px;">${s}</span>`).join('');
+  } else {
+    skillsBox.innerHTML = '<span style="color:var(--muted); font-size:11px;">None</span>';
+  }
 
   // Warnings
   const warnBox = document.getElementById('warn-container');
@@ -435,7 +478,7 @@ async function runWorkflow() {
           setStepState(event.index, 'running');
           setStatus('run-status', `Running step ${event.index + 1} of ${_workflow.steps.length}…`);
         } else if (event.type === 'step_done') {
-          setStepState(event.index, 'done', { params: event.params });
+          setStepState(event.index, 'done', { params: event.params, result: event.result, url: event.url });
           completed++;
         } else if (event.type === 'step_error') {
           setStepState(event.index, 'error', { error: event.error });

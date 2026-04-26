@@ -10,9 +10,14 @@ import asyncio
 import logging
 import re
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+_PT = ZoneInfo("America/Los_Angeles")
 from typing import Any
 
 import httpx
+
+import variable_store
 
 log = logging.getLogger(__name__)
 
@@ -65,12 +70,11 @@ def _resolve_items(items_ref: Any, context: dict) -> list:
 
 async def _get_datetime(user_id: str, params: dict, context: dict) -> str:
     fmt = params.get("format", "iso")
-    tz_name = params.get("timezone", "UTC")
+    tz_name = params.get("timezone", "America/Los_Angeles")
     try:
-        import zoneinfo
-        tz = zoneinfo.ZoneInfo(tz_name)
+        tz = ZoneInfo(tz_name)
     except Exception:
-        tz = timezone.utc
+        tz = _PT
     now = datetime.now(tz)
     if fmt == "human":
         return now.strftime("%A, %B %-d %Y at %-I:%M %p %Z")
@@ -102,18 +106,31 @@ async def _get_user_info(user_id: str, params: dict, context: dict) -> Any:
 
 async def _set_variable(user_id: str, params: dict, context: dict) -> Any:
     value = params.get("value")
-    # The executor will store this under output_key; set_variable also writes
-    # directly via the key param so the context is updated immediately.
     key = params.get("key", "")
+    scope = params.get("scope", "local").lower()
+    
     if key:
         context[key] = value
+        if scope == "global":
+            await variable_store.set_global_variable(user_id, key, value)
+            
     return value
 
 
 async def _get_variable(user_id: str, params: dict, context: dict) -> Any:
     key = params["key"]
     default = params.get("default")
-    return context.get(key, default)
+    
+    # Check local context first
+    if key in context:
+        return context[key]
+        
+    # Fallback to global store
+    global_val = await variable_store.get_global_variable(user_id, key, None)
+    if global_val is not None:
+        return global_val
+        
+    return default
 
 
 async def _calculate(user_id: str, params: dict, context: dict) -> Any:
@@ -128,6 +145,58 @@ async def _calculate(user_id: str, params: dict, context: dict) -> Any:
     except Exception as e:
         log.warning("innate.calculate: error evaluating %r: %s", safe_expr, e)
         return 0
+
+
+async def _datetime_math(user_id: str, params: dict, context: dict) -> str:
+    from datetime import timedelta
+    
+    base_time_str = str(params.get("base_time", ""))
+    operation = str(params.get("operation", "add")).lower().strip()
+    amount = abs(float(params.get("amount", 0)))  # sign comes from operation, not amount
+    unit = str(params.get("unit", "days")).lower().strip()
+    fmt = str(params.get("format", "iso")).lower().strip()
+    
+    try:
+        base_time = datetime.fromisoformat(base_time_str.replace("Z", "+00:00"))
+    except ValueError:
+        base_time = datetime.now(_PT)
+        
+    # Map friendly units to timedelta args
+    if unit in ("year", "years"):
+        delta = timedelta(days=amount * 365)
+    elif unit in ("month", "months"):
+        delta = timedelta(days=amount * 30)
+    elif unit in ("week", "weeks"):
+        delta = timedelta(weeks=amount)
+    elif unit in ("hour", "hours"):
+        delta = timedelta(hours=amount)
+    elif unit in ("minute", "minutes"):
+        delta = timedelta(minutes=amount)
+    elif unit in ("second", "seconds"):
+        delta = timedelta(seconds=amount)
+    else:
+        delta = timedelta(days=amount)
+
+    # Robust subtract detection: the LLM may send "subtract", "sub", "minus",
+    # "-", "–" (en-dash), "—" (em-dash), "−" (Unicode minus U+2212), etc.
+    _SUBTRACT_TOKENS = {
+        "subtract", "sub", "minus", "-", "–", "—", "−",
+        "before", "ago", "back", "earlier",
+    }
+    is_subtract = operation in _SUBTRACT_TOKENS
+        
+    if is_subtract:
+        result_time = base_time - delta
+    else:
+        result_time = base_time + delta
+        
+    if fmt == "human":
+        return result_time.strftime("%A, %B %d, %Y at %I:%M %p").replace(" 0", " ")
+    elif fmt == "date_only":
+        return result_time.strftime("%Y-%m-%d")
+    elif fmt == "time_only":
+        return result_time.strftime("%H:%M:%S")
+    return result_time.isoformat()
 
 
 async def _format_text(user_id: str, params: dict, context: dict) -> str:
@@ -159,11 +228,6 @@ async def _filter_list(user_id: str, params: dict, context: dict) -> list:
             result.append(item)
     return result
 
-
-async def _extract_field(user_id: str, params: dict, context: dict) -> list:
-    items = _resolve_items(params["items"], context)
-    field = str(params["field"])
-    return [i.get(field) if isinstance(i, dict) else None for i in items]
 
 
 async def _slice_list(user_id: str, params: dict, context: dict) -> list:
@@ -212,6 +276,17 @@ async def _http_request(user_id: str, params: dict, context: dict) -> Any:
             return resp.text
 
 
+async def _ai_summarize(user_id: str, params: dict, context: dict) -> str:
+    from ai.llm import generate_text
+    content = params.get("content", "")
+    if isinstance(content, list):
+        content = "\n".join(str(item) for item in content)
+    elif not isinstance(content, str):
+        content = str(content)
+    instruction = params.get("instruction", "Summarize the following content concisely in plain English.")
+    return generate_text(instruction, content)
+
+
 async def _log(user_id: str, params: dict, context: dict) -> None:
     level = str(params.get("level", "info")).lower()
     msg = str(params.get("message", ""))
@@ -253,6 +328,7 @@ async def _closest_element(user_id: str, params: dict, context: dict) -> Any:
 
 _HANDLERS = {
     "get_datetime":  _get_datetime,
+    "datetime_math": _datetime_math,
     "get_user_info": _get_user_info,
     "set_variable":  _set_variable,
     "get_variable":  _get_variable,
@@ -261,13 +337,14 @@ _HANDLERS = {
     "join_list":     _join_list,
     "count":         _count,
     "filter_list":   _filter_list,
-    "extract_field": _extract_field,
+
     "slice_list":    _slice_list,
     "merge_text":    _merge_text,
     "wait":          _wait,
     "http_request":  _http_request,
     "log":           _log,
     "closest_element": _closest_element,
+    "ai_summarize":    _ai_summarize,
 }
 
 

@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.net.Uri
 import android.os.IBinder
 import android.util.Base64
 import android.util.Log
@@ -271,6 +272,17 @@ class AudioCaptureService : Service() {
 
         if (resp.transcript.isBlank() || resp.action == "ignored" || resp.workflowStatus == "ignored") {
             FluxEvents.emitDebugStatus("Ignoring empty transcript for $chunkId")
+            return
+        }
+
+        if (resp.reauthRequired && resp.reauthUrl.isNotBlank()) {
+            Log.w("Flux/Auth", "Google token expired — opening re-auth URL")
+            FluxEvents.emitDebugStatus("Google token expired. Opening browser to reconnect...")
+            TtsQueue.speak("Your Google account needs to be reconnected. Opening browser now.")
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(resp.reauthUrl)).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
             return
         }
 
