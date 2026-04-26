@@ -421,6 +421,9 @@ async def _classify_workflow_request(user_id: str, transcript: str) -> tuple[dic
         logger.error("[audio/workflow] classify failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=502, detail=f"Workflow classification failed: {exc}")
 
+    import json as _json
+    logger.info("[audio/workflow] classified schema:\n%s", _json.dumps(workflow, indent=2))
+
     if workflow.get("intent") == "denied":
         reason = workflow.get("denial_reason", "None of your connected apps can handle that request.")
         logger.info("[audio/workflow] denied: %s user=%s", reason, user_id)
@@ -678,8 +681,12 @@ async def _confirm_pending_workflow(user_id: str, pending: confirmation_store.Pe
             trigger_phrase=pending.workflow_trigger,
             steps=pending.steps,
         )
-        logger.info("[audio/workflow] created id=%s trigger=%r user=%s",
-                    workflow_id, pending.workflow_trigger, user_id)
+        import json as _json
+        logger.info(
+            "[audio/workflow] created id=%s trigger=%r user=%s\nschema:\n%s",
+            workflow_id, pending.workflow_trigger, user_id,
+            _json.dumps({"trigger_phrase": pending.workflow_trigger, "steps": pending.steps}, indent=2),
+        )
         await audit_store.update_audit_record(pending.audit_id, {
             "status": "created",
             "workflow_id": workflow_id,
