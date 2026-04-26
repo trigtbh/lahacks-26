@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useAuth0 } from "@auth0/auth0-react";
 import "./App.css";
 
 const API_BASE = "";
@@ -27,7 +28,7 @@ const AUTH_GROUPS = {
 // ── Theme ─────────────────────────────────────────────────────────────────────
 
 const DEFAULT_THEME = {
-  appName:"idlemaxing", tagline:"Voice automations for Ray-Ban glasses.",
+  appName:"idlemaxxing", tagline:"Voice automations for Meta Raybans",
   accentColor:"#ffffff", bgColor:"#080808", cardBg:"#111111",
   borderColor:"#1e1e1e", successColor:"#4ade80", mutedColor:"#555555",
 };
@@ -62,53 +63,109 @@ function useConnections(userId) {
   return { connected, refresh };
 }
 
-// ── Panel row — defined OUTSIDE ThemePanel so it never remounts ───────────────
+// ── Steps ─────────────────────────────────────────────────────────────────────
 
-function ThemeRow({ label, k, type, value, onChange }) {
+const VOICE_CMDS = [
+  "order me a pizza!",
+  "cancel my 3pm",
+  "dm the team",
+  "play some music",
+];
+
+function PixelBubble({ text, cmdIdx }) {
   return (
-    <div className="t-row">
-      <label className="t-label">{label}</label>
-      {type === "color" ? (
-        <div className="color-row">
-          <input type="color" className="color-swatch" value={value}
-            onChange={e => onChange(k, e.target.value)} />
-          <input type="text" className="text-input text-input--xs" value={value}
-            onChange={e => onChange(k, e.target.value)} />
-        </div>
-      ) : (
-        <input type="text" className="text-input text-input--xs" value={value}
-          onChange={e => onChange(k, e.target.value)} />
-      )}
+    <div className="px-bubble">
+      <svg className="px-bubble-svg" viewBox="0 0 210 120" xmlns="http://www.w3.org/2000/svg">
+        {/* Body with 8px pixel-stepped corners */}
+        <polygon
+          points="8,0 202,0 210,8 210,84 202,92 8,92 0,84 0,8"
+          fill="white" stroke="#0d0d0d" strokeWidth="4" strokeLinejoin="miter"
+        />
+        {/* Stepped tail pointing down-right toward Chad */}
+        <polygon
+          points="136,92 136,100 144,100 144,108 152,108 152,116 168,116 168,108 176,108 176,100 184,100 184,92"
+          fill="white" stroke="#0d0d0d" strokeWidth="4" strokeLinejoin="miter"
+        />
+        {/* Hide internal seam */}
+        <rect x="139" y="89" width="42" height="8" fill="white" />
+      </svg>
+      <div className="px-bubble-text" key={cmdIdx}>{text}</div>
     </div>
   );
 }
 
-// ── Steps ─────────────────────────────────────────────────────────────────────
+function WelcomeStep({ onNext, theme }) {
+  const { isAuthenticated, isLoading, loginWithRedirect, user } = useAuth0();
+  const [mouse, setMouse] = useState({ x: 0.5, y: 0.5 });
+  const [cmdIdx, setCmdIdx] = useState(0);
 
-function WelcomeStep({ userId, setUserId, onNext, theme }) {
+  useEffect(() => {
+    const fn = e => setMouse({ x: e.clientX / window.innerWidth, y: e.clientY / window.innerHeight });
+    window.addEventListener('mousemove', fn);
+    return () => window.removeEventListener('mousemove', fn);
+  }, []);
+
+  useEffect(() => {
+    const t = setInterval(() => setCmdIdx(i => (i + 1) % VOICE_CMDS.length), 3500);
+    return () => clearInterval(t);
+  }, []);
+
+  const dx = mouse.x - 0.5;
+  const dy = mouse.y - 0.5;
+
   return (
     <div className="page page--welcome">
-      <div className="welcome-inner">
-        <div className="welcome-brand">{theme.appName}</div>
-        <h1 className="hero-title">
-          Stop doing<br />
-          <span className="hero-accent">things yourself</span>
-        </h1>
-        <p className="hero-sub">{theme.tagline}</p>
-        <div className="welcome-form">
-          <div className="field">
-            <label className="field-label">Your user ID</label>
-            <input className="text-input w-input" value={userId}
-              onChange={e => setUserId(e.target.value)}
-              placeholder="akshai" autoFocus />
+      <div className="w-body">
+        {/* ── Orange left bar ── */}
+        <div className="w-leftbar">
+          <div className="w-leftbar-cap" />
+          <span className="w-leftbar-label">idlemaxxing © 2026</span>
+        </div>
+
+        {/* ── Background decorative boxes ── */}
+        <div className="w-bg-boxes" aria-hidden="true">
+          <div className="w-bb w-bb--1" />
+          <div className="w-bb w-bb--2" />
+          <div className="w-bb w-bb--3" />
+        </div>
+
+        {/* ── Content zone ── */}
+        <div className="w-content">
+          <div className="welcome-inner">
+            <div className="welcome-brand">{theme.appName}</div>
+            <h1 className="hero-title">
+              Stop doing<br />
+              <span className="hero-accent">things yourself</span>
+            </h1>
+            <p className="hero-sub">{theme.tagline}</p>
+            <div className="welcome-form">
+              {isLoading ? (
+                <button className="btn-welcome" disabled>···</button>
+              ) : isAuthenticated ? (
+                <>
+                  <p className="w-signed">↳ {user.email}</p>
+                  <button className="btn-welcome" onClick={onNext}>
+                    Get started <span className="arr">→</span>
+                  </button>
+                </>
+              ) : (
+                <button className="btn-welcome" onClick={() => loginWithRedirect()}>
+                  Login to get started <span className="arr">→</span>
+                </button>
+              )}
+            </div>
           </div>
-          <button className="btn-welcome" onClick={onNext} disabled={!userId.trim()}>
-            Get started <span className="arr">→</span>
-          </button>
+        </div>
+
+        {/* ── Chad ── */}
+        <div className="welcome-chad" style={{ transform:`translate(${dx*7}px,${dy*5}px)`, transition:'transform 0.12s linear' }}>
+          <PixelBubble text={VOICE_CMDS[cmdIdx]} cmdIdx={cmdIdx} />
+          <img src="/Chad.png" alt="Chad" className="chad-img" />
         </div>
       </div>
-      <div className="welcome-chad">
-        <img src="/Chad.png" alt="Chad" className="chad-img" />
+      <div className="lahacks-corner">
+        <img src="/logo.jpg" alt="LAHacks" className="lahacks-logo" />
+        <span className="lahacks-label">Built at LAHacks</span>
       </div>
     </div>
   );
@@ -368,61 +425,6 @@ function DoneStep({ selected, theme }) {
   );
 }
 
-// ── Customize panel ───────────────────────────────────────────────────────────
-
-function ThemePanel({ theme, setTheme, onClose }) {
-  const update = useCallback((k, v) => {
-    setTheme(prev => {
-      const next = { ...prev, [k]: v };
-      applyTheme(next);
-      localStorage.setItem("idwdi_theme", JSON.stringify(next));
-      return next;
-    });
-  }, [setTheme]);
-
-  const FIELDS = [
-    { section:"Branding", rows:[
-      { label:"App name",  k:"appName",      type:"text"  },
-      { label:"Tagline",   k:"tagline",       type:"text"  },
-    ]},
-    { section:"Colors", rows:[
-      { label:"Accent",     k:"accentColor",  type:"color" },
-      { label:"Background", k:"bgColor",      type:"color" },
-      { label:"Card",       k:"cardBg",       type:"color" },
-      { label:"Border",     k:"borderColor",  type:"color" },
-      { label:"Success",    k:"successColor", type:"color" },
-      { label:"Muted",      k:"mutedColor",   type:"color" },
-    ]},
-  ];
-
-  return (
-    <div className="overlay" onClick={e => e.target===e.currentTarget && onClose()}>
-      <div className="panel">
-        <div className="panel-head">
-          <span>Customize</span>
-          <button className="icon-btn" onClick={onClose}>✕</button>
-        </div>
-        <div className="panel-body">
-          {FIELDS.map(({ section, rows }) => (
-            <div key={section} className="panel-group">
-              <div className="panel-group-label">{section}</div>
-              {rows.map(f => (
-                <ThemeRow key={f.k} label={f.label} k={f.k} type={f.type}
-                  value={theme[f.k]} onChange={update} />
-              ))}
-            </div>
-          ))}
-        </div>
-        <button className="btn-reset" onClick={() => {
-          applyTheme(DEFAULT_THEME);
-          setTheme(DEFAULT_THEME);
-          localStorage.removeItem("idwdi_theme");
-        }}>Reset to defaults</button>
-      </div>
-    </div>
-  );
-}
-
 // ── Top bar ───────────────────────────────────────────────────────────────────
 
 function TopBar({ theme }) {
@@ -438,28 +440,24 @@ function TopBar({ theme }) {
 const STEPS = ["welcome","select","connect","done"];
 
 export default function App() {
-  const [step, setStep]           = useState("welcome");
-  const [userId, setUserId]       = useState("akshai");
-  const [selected, setSelected]   = useState(new Set());
-  const [showPanel, setShowPanel] = useState(false);
-  const [theme, setTheme]         = useState(() => { const t = loadTheme(); applyTheme(t); return t; });
+  const { user, isAuthenticated } = useAuth0();
+  const [step, setStep]     = useState("welcome");
+  const [selected, setSelected] = useState(new Set());
+  const [theme]             = useState(() => { const t = loadTheme(); applyTheme(t); return t; });
+
+  const userId = isAuthenticated ? (user?.email || user?.sub || "") : "";
 
   const { connected, refresh } = useConnections(userId);
   const next = () => setStep(s => STEPS[STEPS.indexOf(s)+1]);
 
   return (
-    <>
-      <div className={`shell${step === "select" || step === "connect" ? " shell--light" : ""}`}>
-        {step !== "welcome" && step !== "done" && <TopBar theme={theme} />}
+    <div className={`shell${step === "select" || step === "connect" ? " shell--light" : ""}`}>
+      {step !== "welcome" && step !== "done" && <TopBar theme={theme} />}
 
-        {step==="welcome" && <WelcomeStep userId={userId} setUserId={setUserId} onNext={next} theme={theme} />}
-        {step==="select"  && <SelectStep  selected={selected} setSelected={setSelected} onNext={next} />}
-        {step==="connect" && <ConnectStep selected={selected} userId={userId} connected={connected} onRefresh={refresh} onDone={next} onBack={() => setStep("select")} />}
-        {step==="done"    && <DoneStep    selected={selected} theme={theme} />}
-      </div>
-
-      <button className="fab" onClick={() => setShowPanel(true)} title="Customize">⚙</button>
-      {showPanel && <ThemePanel theme={theme} setTheme={setTheme} onClose={() => setShowPanel(false)} />}
-    </>
+      {step==="welcome" && <WelcomeStep onNext={next} theme={theme} />}
+      {step==="select"  && <SelectStep  selected={selected} setSelected={setSelected} onNext={next} />}
+      {step==="connect" && <ConnectStep selected={selected} userId={userId} connected={connected} onRefresh={refresh} onDone={next} onBack={() => setStep("select")} />}
+      {step==="done"    && <DoneStep    selected={selected} theme={theme} />}
+    </div>
   );
 }

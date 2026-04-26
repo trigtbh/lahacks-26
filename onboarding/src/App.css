@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
 /* ── Variables ─────────────────────────────────────────────────────────────── */
 :root {
   --accent:  #ffffff;
@@ -134,35 +136,123 @@ body::after {
 .page--welcome {
   flex: 1;
   display: flex;
-  align-items: stretch;
+  flex-direction: column;
   background: #f7f4f0;
+  background-image: url("data:image/svg+xml,%3Csvg width='28' height='28' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='14' cy='14' r='1.4' fill='%23c2b9b1'/%3E%3C/svg%3E");
+  background-size: 28px 28px;
   position: relative;
   overflow: hidden;
   min-height: 100vh;
 }
 
+/* ── Background decorative shapes ── */
+.w-bg-boxes {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.w-bb { position: absolute; }
+
+.w-bb--1 {}
+.w-bb--2 {}
+.w-bb--3 {}
+
+/* ── Body row ── */
+.w-body {
+  flex: 1;
+  display: flex;
+  align-items: stretch;
+  position: relative;
+}
+
+/* ── Left orange bar ── */
+.w-leftbar {
+  flex: 0 0 52px;
+  background: #f73a00;
+  background-image: url("data:image/svg+xml,%3Csvg width='10' height='10' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M-1 1l2-2M0 10l10-10M9 11l2-2' stroke='%23fff' stroke-width='1.5' stroke-opacity='0.18'/%3E%3C/svg%3E");
+  border-right: 3px solid #0d0d0d;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow: hidden;
+}
+
+.w-leftbar-cap {
+  flex: 0 0 52px;
+  width: 100%;
+  background-image: url("data:image/svg+xml,%3Csvg width='10' height='10' xmlns='http://www.w3.org/2000/svg'%3E%3Crect width='5' height='5' fill='%23fff' fill-opacity='0.28'/%3E%3Crect x='5' y='5' width='5' height='5' fill='%23fff' fill-opacity='0.28'/%3E%3C/svg%3E");
+  background-size: 10px 10px;
+  border-bottom: 2px solid rgba(0,0,0,0.2);
+}
+
+.w-leftbar-label {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.5);
+  white-space: nowrap;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ── Content zone ── */
+.w-content {
+  flex: 0 0 auto;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 36px 28px;
+}
+
+/* ── Parallax floating shapes ── */
+.w-floats {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+  transition: transform 0.1s linear;
+}
+
+/* ── Card ── */
 .welcome-inner {
   flex: 0 0 auto;
   width: fit-content;
   display: flex; flex-direction: column; gap: 24px;
-  padding: 4px 36px 8px 36px;
+  padding: 20px 36px 28px 36px;
   justify-content: center;
   background: #fff;
-  border: 2px solid #0d0d0d;
-  margin: 32px 0 32px 32px;
+  border: 2.5px solid #0d0d0d;
   border-radius: 28px;
+  position: relative;
+  z-index: 3;
 }
 
+/* ── Signed-in indicator ── */
+.w-signed {
+  font-size: 12px;
+  color: #888;
+  font-family: monospace;
+  margin: 0;
+}
+
+/* ── Chad ── */
 .welcome-chad {
   flex: 1;
   display: flex;
   align-items: flex-end;
   justify-content: flex-end;
   padding-right: 4%;
-  padding-bottom: 0;
   overflow: hidden;
+  position: relative;
 }
-
 
 .chad-img {
   height: 85vh;
@@ -170,8 +260,91 @@ body::after {
   object-fit: contain;
   object-position: bottom center;
   margin-bottom: 5vh;
+  position: relative;
+  z-index: 1;
 }
 
+
+/* ── Pixel speech bubble ── */
+.px-bubble {
+  position: absolute;
+  top: 20%;
+  left: 22%;
+  z-index: 2;
+  width: 260px;
+  opacity: 0;
+  animation: vc-in 0.5s 0.5s var(--ease) forwards, vc-float 4s 1.1s ease-in-out infinite;
+}
+
+.px-bubble-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.px-bubble-text {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%;
+  height: 92px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 16px;
+  font-family: 'Press Start 2P', monospace;
+  font-size: 13px;
+  color: #0d0d0d;
+  text-align: center;
+  line-height: 1.8;
+  animation: px-text-cycle 3.5s var(--ease);
+}
+
+@keyframes vc-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes vc-float {
+  0%, 100% { transform: translateY(0); }
+  50%       { transform: translateY(-8px); }
+}
+
+@keyframes px-text-cycle {
+  0%   { opacity: 0; }
+  12%  { opacity: 1; }
+  80%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* ── LAHacks corner ── */
+.lahacks-corner {
+  position: absolute;
+  bottom: 28px;
+  right: 28px;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.lahacks-logo {
+  width: 130px;
+  height: auto;
+  border-radius: 6px;
+  display: block;
+}
+
+.lahacks-label {
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: #0d0d0d;
+  text-transform: uppercase;
+}
+
+/* ── Brand / hero (unchanged) ── */
 .welcome-brand {
   font-size: clamp(56px, 9vw, 100px);
   font-weight: 900;
@@ -179,7 +352,6 @@ body::after {
   line-height: 0.9;
   color: #f73a00;
 }
-
 
 .hero-title {
   font-size: 38px; font-weight: 800;
