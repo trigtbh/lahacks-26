@@ -11,7 +11,7 @@ import os
 import token_store
 import zapier_store
 
-_GOOGLE_APPS = {"gmail", "google_calendar", "google_drive"}
+_GOOGLE_APPS = {"gmail", "google_calendar", "google_drive", "google_people"}
 
 
 async def get_available_apps(user_id: str) -> set[str]:
@@ -30,6 +30,8 @@ async def get_available_apps(user_id: str) -> set[str]:
             available.update(_GOOGLE_APPS)
         elif service == "slack":
             available.add("slack")
+        elif service == "notion":
+            available.add("notion")
 
     # Server-side API key services (available to all users if keys are configured)
     if os.environ.get("GOOGLE_MAPS_API_KEY"):
