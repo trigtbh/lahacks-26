@@ -21,7 +21,7 @@ import sys
 import httpx
 
 BASE = os.getenv("BASE", "http://localhost:8000")
-USER = os.getenv("USER", "ved2902")
+USER = os.getenv("USER", "ved29022004@gmail.com")
 
 # ── ANSI colours ─────────────────────────────────────────
 GRN  = "\033[92m"
@@ -47,8 +47,8 @@ WORKFLOWS = [
     },
     {
         "name":       "End of Day",
-        "transcript": "end of day",
-        "expect":     ["slack.send_channel", "notion.create_page"],
+        "transcript": "I'm done with the day",
+        "expect":     ["google_drive.read_document", "slack.send_channel", "notion.create_page"],
     },
 ]
 
@@ -144,7 +144,8 @@ async def check_server(client: httpx.AsyncClient) -> bool:
         _fail(f"Cannot reach server: {exc}")
         return False
 
-    workflows = r.json()
+    body = r.json()
+    workflows = body.get("workflows", body) if isinstance(body, dict) else body
     _ok(f"Server reachable — {len(workflows)} workflow(s) saved for '{USER}'")
     for w in workflows:
         _info(w.get("trigger_phrase", "(no trigger)"))
