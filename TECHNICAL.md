@@ -1,4 +1,4 @@
-# Flux — Exhaustive Technical Reference
+# Chad (barelyatwork) — Exhaustive Technical Reference
 
 ## Table of Contents
 
@@ -29,7 +29,7 @@
 
 ## 1. System Overview
 
-Flux is a voice-first automation engine. It accepts audio input, transcribes speech, classifies intent via an LLM, constructs validated workflow JSON from a closed-world action schema, optionally persists the workflow, and executes it against real cloud APIs — replying with synthesised speech.
+Chad is a voice-first automation engine. It accepts audio input, transcribes speech, classifies intent via an LLM, constructs validated workflow JSON from a closed-world action schema, optionally persists the workflow, and executes it against real cloud APIs — replying with synthesised speech.
 
 The system is composed of four independent services:
 
@@ -667,7 +667,7 @@ AudioRecord (PCM 16-bit, 16kHz, mono)
     │
     ▼
 WakeWordDetector
-    │  Detects "Hey Flux" using on-device keyword model
+    │  Detects "Hey Chad" using on-device keyword model
     │  Starts recording after wake word
     │
     ▼
@@ -691,7 +691,7 @@ FlowApiClient
    - Concatenates all chunks → single bytes object
    - Calls Deepgram Nova-3 async transcription
    - Extracts transcript text
-   - Strips wake word prefix (everything before first comma or after "Hey Flux,")
+   - Strips wake word prefix (everything before first comma or after "Hey Chad,")
    - Routes to intent handler
 
 ### Audio Response
@@ -953,7 +953,7 @@ Pending confirmations expire after 60 seconds. On `/audio/end`, if confirmation 
 
 **Purpose:** Guide users through connecting their apps (Google, Slack, Notion). Presents OAuth connect buttons that deep-link to backend `/auth/*` endpoints.
 
-**Auth0 integration:** Uses `@auth0/auth0-react` for the user's Flux account identity. The Auth0 `sub` claim becomes the `user_id` passed to all backend calls.
+**Auth0 integration:** Uses `@auth0/auth0-react` for the user's Chad account identity. The Auth0 `sub` claim becomes the `user_id` passed to all backend calls.
 
 **State:** After OAuth round-trips, backend stores tokens in MongoDB. Frontend confirms connection by calling `GET /user/{user_id}/connections`.
 
@@ -1118,7 +1118,7 @@ The committed `.env` file contains live credentials for all services. These shou
 | `ELEVENLABS_VOICE_ID` | No | `JBFqnCBsd6RMkjVDRZzb` | ElevenLabs voice ID (default: George) |
 | `GOOGLE_CLIENT_ID` | Yes | — | Google OAuth 2.0 client ID |
 | `GOOGLE_CLIENT_SECRET` | Yes | — | Google OAuth 2.0 client secret |
-| `BACKEND_URL` | Yes | — | Public URL of backend (e.g. `https://flux.example.com`) |
+| `BACKEND_URL` | Yes | — | Public URL of backend (e.g. `https://Chad.example.com`) |
 | `GOOGLE_REDIRECT_URI` | No | `{BACKEND_URL}/connect/google/redirect` | Google OAuth redirect |
 | `GOOGLE_MAPS_API_KEY` | No | — | Enables `google_maps` app for all users |
 | `SERPAPI_KEY` | No | — | Enables `google_flights` app via SerpAPI |
