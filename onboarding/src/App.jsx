@@ -28,7 +28,7 @@ const AUTH_GROUPS = {
 // ── Theme ─────────────────────────────────────────────────────────────────────
 
 const DEFAULT_THEME = {
-  appName:"idlemaxxing", tagline:"Voice automations for Meta Raybans",
+  appName:"barelyatwork", tagline:"Voice automations for Meta Raybans",
   accentColor:"#ffffff", bgColor:"#080808", cardBg:"#111111",
   borderColor:"#1e1e1e", successColor:"#4ade80", mutedColor:"#555555",
 };
@@ -119,7 +119,7 @@ function WelcomeStep({ onNext, theme }) {
         {/* ── Orange left bar ── */}
         <div className="w-leftbar">
           <div className="w-leftbar-cap" />
-          <span className="w-leftbar-label">idlemaxxing © 2026</span>
+          <span className="w-leftbar-label">barelyatwork © 2026</span>
         </div>
 
         {/* ── Background decorative boxes ── */}
