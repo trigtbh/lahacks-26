@@ -7,10 +7,15 @@ from __future__ import annotations
 
 import os
 
+import google.auth.exceptions
 import google.auth.transport.requests
 import google.oauth2.credentials
 
 import token_store
+
+
+class TokenExpiredError(Exception):
+    """Google OAuth token is expired and the refresh failed — user must re-authenticate."""
 
 
 async def get_google_creds(user_id: str) -> google.oauth2.credentials.Credentials:
@@ -25,15 +30,26 @@ async def get_google_creds(user_id: str) -> google.oauth2.credentials.Credential
         client_id=os.getenv("GOOGLE_CLIENT_ID"),
         client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
         scopes=doc.get("scopes"),
+        expiry=doc.get("expiry"),
     )
 
     if creds.expired and creds.refresh_token:
-        creds.refresh(google.auth.transport.requests.Request())
+        try:
+            creds.refresh(google.auth.transport.requests.Request())
+        except google.auth.exceptions.RefreshError as exc:
+            raise TokenExpiredError(
+                f"Google token refresh failed for user '{user_id}' — re-auth required"
+            ) from exc
         await token_store.save_token(user_id, "google", {
             "access_token":  creds.token,
             "refresh_token": creds.refresh_token,
             "token_uri":     creds.token_uri,
             "scopes":        list(creds.scopes or []),
+            "expiry":        creds.expiry,
         })
+    elif not creds.refresh_token:
+        raise TokenExpiredError(
+            f"Google token has no refresh_token for user '{user_id}' — re-auth required"
+        )
 
     return creds
