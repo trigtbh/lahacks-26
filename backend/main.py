@@ -24,7 +24,7 @@ from elevenlabs.client import AsyncElevenLabs
 from deepgram import DeepgramClient, PrerecordedOptions
 
 
-from agentverse_client import find_agent, send_to_agent, start_gateway
+from agentverse_client import find_agent, send_to_agent
 import session_store as sessions
 
 # ── Workflow pipeline ─────────────────────────────────────────────────────────
@@ -179,7 +179,6 @@ def _parse_connect_intent(text: str) -> str | None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    start_gateway()
     yield
 
 _BASE_DIR       = Path(__file__).parent
