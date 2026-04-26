@@ -805,7 +805,7 @@ async def _execute_steps(
             if output_key and result is not None:
                 context[output_key] = result
 
-            completed.append({"step": label, "params": resolved})
+            completed.append({"step": label, "params": resolved, "result": result})
             if event_sink is not None:
                 event_sink.append({"type": "step_done", "label": label, "params": resolved})
 
