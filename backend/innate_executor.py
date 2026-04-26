@@ -287,6 +287,25 @@ async def _ai_summarize(user_id: str, params: dict, context: dict) -> str:
     return generate_text(instruction, content)
 
 
+async def _format_list(user_id: str, params: dict, context: dict) -> str:
+    """Extract a field from a list of dicts and join as newline-separated text."""
+    items = params.get("items", [])
+    if isinstance(items, str) and items.startswith("context."):
+        from executor import _resolve_context_path
+        items = _resolve_context_path(items[len("context."):], context) or []
+    field = params.get("field", "subject")
+    sep = params.get("separator", "\n")
+    lines = []
+    for i, item in enumerate(items, 1):
+        if isinstance(item, dict):
+            val = item.get(field, "")
+        else:
+            val = str(item)
+        if val:
+            lines.append(f"{i}. {val}")
+    return sep.join(lines) if lines else "(no items)"
+
+
 async def _log(user_id: str, params: dict, context: dict) -> None:
     level = str(params.get("level", "info")).lower()
     msg = str(params.get("message", ""))
@@ -345,6 +364,7 @@ _HANDLERS = {
     "log":           _log,
     "closest_element": _closest_element,
     "ai_summarize":    _ai_summarize,
+    "format_list":     _format_list,
 }
 
 

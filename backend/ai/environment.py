@@ -201,6 +201,12 @@ ALLOWED_ACTIONS: dict[str, dict] = {
     },
 
     "google_drive": {
+        "read_document": {
+            "required": [],
+            "optional": ["file_name", "file_id"],
+            "description": "Read the full plain-text content of a Google Doc by name or ID. Returns {document_id, text}. Always provide output_key so later steps can reference context.<key>.text.",
+            "returns": '{"document_id": str, "text": str}',
+        },
         "create_document": {
             "required": ["title"],
             "optional": ["content"],
@@ -483,6 +489,15 @@ RULES:
    Whenever a step needs the current date or time, you MUST first emit an innate.get_datetime
    step with an output_key, then reference that output in later steps via context.<key>.
    Hardcoding any date string (e.g. "2024-01-01", "today", "now") is forbidden.
+8. To READ the contents of a Google Doc, use the action google_drive.read_document with param file_name. NEVER use the resolver google_drive.file_by_name as an action — resolvers are only valid inside param values, not as app.action.
+9. For Slack, always use send_channel (requires channel and message) or send_dm (requires to and message). There is NO send_message action.
+10. Do NOT emit control.if unless the user explicitly described a conditional branch. A summarize-and-send flow has no condition.
+
+COMMON PATTERNS (follow these exactly):
+- "Read a doc and summarize" → google_drive.read_document (output_key: doc) → innate.ai_summarize with content: "context.doc.text"
+- "Search emails in a time window" → innate.get_datetime → innate.datetime_math (x2 for start/end) → gmail.search_email with inline context refs in query
+- "Post to Slack channel" → slack.send_channel with channel: "#channel-name" and message: "context.some_key"
+- "Create a Notion page" → notion.create_page with title and content from context refs
 
 ALLOWED APPS AND ACTIONS:
 {apps_block}
